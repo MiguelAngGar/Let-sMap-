@@ -1,268 +1,256 @@
 #!/usr/bin/env python3
 """
-analyze.py  v2
+analyze.py  v4
 ──────────────────────────────────────────────────────────────────────────────
-BPM detection with grid-alignment refinement.
+Direct beat-grid BPM optimization + downbeat detection.
 
 Pipeline:
-  1. Initial BPM + beat timestamps  (librosa beat tracker)
-  2. Local inter-beat BPM estimates  (60 / Δt for each consecutive pair)
-  3. Median aggregation              (robust against missed / doubled beats)
-  4. Grid alignment error            (evaluate N candidates against real beats)
-  5. Smart integer rounding          (prefer clean integers when error is equal)
-  6. Onset detection                 (first_beat_time in original audio)
-  7. Silence calculation             (≥1.5s lead-in, beat-grid aligned)
+  1. Beat timestamps + activations  →  madmom RNNBeatProcessor + DBN
+  2. Direct BPM optimization        →  vectorized grid alignment sweep
+  3. Downbeat detection             →  phase analysis via beat activation strength
+  4. First onset                    →  madmom onset detector, fallback to beats[0]
+  5. Silence pad                    →  ≥1.5 s lead-in, anchored to downbeat
 
-Output: one JSON object on stdout.
-Debug:  human-readable log on stderr.
+KEY DESIGN:
+  BPM is an optimization variable, not a measurement.
+  We find the BPM that minimizes Σ|t_i − nearest_grid(t_i)| across all
+  detected beats. No KDE, no histograms, no local BPM distributions.
+  Beat timestamps from madmom are treated as ground truth.
+
+DOWNBEAT:
+  Among the beat grid positions, we detect which phase (mod 4) consistently
+  falls on the strongest rhythmic accents by scoring each phase against the
+  madmom beat activation function. The winning phase is the musical "1".
+  Silence is anchored to the downbeat so the grid starts on beat 1.
 """
 
 import sys
 import json
 import math
+import types
 import numpy as np
 
-MIN_LEAD_IN   = 1.5    # seconds of mandatory lead-in before first beat
-MIN_BEAT_GAP  = 0.10   # ignore inter-beat intervals shorter than this (noise)
-MAX_CANDIDATES = 16    # cap candidate list to keep evaluation fast
+# ── pkg_resources shim ────────────────────────────────────────────────────────
+# madmom.__init__ imports pkg_resources only to read its own version string.
+# Inject a minimal mock if setuptools is absent in this environment.
+try:
+    import pkg_resources
+except ImportError:
+    _pr = types.ModuleType('pkg_resources')
+    _pr.get_distribution     = lambda n: type('D', (), {'version': '0.0.0', 'requires': lambda: []})()
+    _pr.DistributionNotFound = Exception
+    _pr.VersionConflict      = Exception
+    sys.modules['pkg_resources'] = _pr
+
+MIN_LEAD_IN  = 1.5     # mandatory seconds before the downbeat
+BPM_MIN      = 60.0
+BPM_MAX      = 220.0
+BPM_STEP     = 0.01    # 0.01 BPM resolution → <0.01 s drift over 100 beats
+MADMOM_FPS   = 100     # frames-per-second of madmom's RNN output
 
 
-# ── Silence calculation ───────────────────────────────────────────────────────
-# Mirrors pipeline/phase2.js  calcSilencePad() exactly.
+# ── Silence padding ───────────────────────────────────────────────────────────
 
-def calc_silence_pad(first_beat_time, bpm):
+def calc_silence_pad(anchor_time, bpm):
+    """
+    Compute how much silence to prepend so that `anchor_time` (the downbeat)
+    falls on a beat-grid position at ≥ MIN_LEAD_IN seconds from the start.
+
+        silence_pad + anchor_time  =  N × beat_dur   (N integer ≥ 1)
+        silence_pad               ≥  MIN_LEAD_IN
+
+    Mirrors pipeline/phase2.js calcSilencePad() exactly.
+    """
     beat_dur     = 60.0 / bpm
-    n            = math.ceil((first_beat_time + MIN_LEAD_IN) / beat_dur)
+    n            = math.ceil((anchor_time + MIN_LEAD_IN) / beat_dur)
     total_offset = n * beat_dur
-    silence_pad  = total_offset - first_beat_time
+    silence_pad  = total_offset - anchor_time
     if silence_pad < MIN_LEAD_IN:
         n           += 1
         total_offset = n * beat_dur
-        silence_pad  = total_offset - first_beat_time
+        silence_pad  = total_offset - anchor_time
     return round(silence_pad, 6), round(total_offset, 6)
 
 
-# ── Grid alignment error ──────────────────────────────────────────────────────
+# ── Direct BPM optimization ───────────────────────────────────────────────────
 
-def grid_alignment_error(bpm, beat_times):
+def optimize_bpm(beat_times):
     """
-    How well does `bpm` fit the sequence of detected beat timestamps?
+    Find the BPM that minimizes cumulative grid alignment error.
 
     Algorithm
     ─────────
-    Anchor the theoretical grid at beat_times[0]:
-        grid(n) = t0 + n × (60 / bpm)
+    For every candidate BPM c in [BPM_MIN, BPM_MAX] with step BPM_STEP:
 
-    For every detected beat t_i, project it onto the grid:
-        n_i = round( (t_i − t0) / beat_dur )
-        error_i = | t_i − grid(n_i) |
+        beat_dur  = 60 / c
+        t0        = beat_times[0]           ← grid anchor
 
-    Return the SUM of all errors (seconds).  Lower = better fit.
+        For each detected beat t_i:
+            n_i     = round( (t_i − t0) / beat_dur )
+            err_i   = | t_i − (t0 + n_i × beat_dur) |
 
-    Why this works: a correct BPM will have beat_times landing very close
-    to grid positions throughout the whole track.  A wrong BPM accumulates
-    error because each beat drifts further from the nearest grid line.
+        total_error(c)  =  Σ err_i
+
+    We return the c that minimises total_error.
+
+    Implementation is fully vectorised:
+        offsets    = (beats[None, :] − t0) / beat_durs[:, None]   shape (M, N)
+        errors     = | offsets − round(offsets) | × beat_durs      shape (M, N)
+        total_err  = errors.sum(axis=1)                             shape (M,)
+
+    Memory peak: ~(16000 × 400 × 8) bytes ≈ 50 MB — acceptable.
+
+    Why this is better than KDE / local BPM distributions:
+      The grid error is a direct, global measure of how well the BPM fits.
+      Statistical intermediaries (KDE, median) smooth noise at the cost of
+      introducing their own bias. Grid error has no bias: every beat contributes
+      equally and drift is punished naturally as the track progresses.
+
+    Returns (bpm, alignment_error, beat_offset)
     """
-    if bpm <= 0 or len(beat_times) < 2:
-        return float('inf')
+    beats      = np.array(beat_times, dtype=np.float64)
+    t0         = float(beats[0])
 
-    beat_dur   = 60.0 / bpm
-    t0         = beat_times[0]
-    total_err  = 0.0
+    candidates = np.arange(BPM_MIN, BPM_MAX + BPM_STEP / 2, BPM_STEP)
+    beat_durs  = 60.0 / candidates                              # (M,)
 
-    for t in beat_times:
-        n        = int(round((t - t0) / beat_dur))
-        grid_t   = t0 + n * beat_dur
-        total_err += abs(t - grid_t)
+    offsets    = (beats[None, :] - t0) / beat_durs[:, None]    # (M, N)
+    n_nearest  = np.round(offsets)
+    deviations = np.abs(offsets - n_nearest) * beat_durs[:, None]  # seconds
+    total_errs = deviations.sum(axis=1)                         # (M,)
 
-    return total_err
+    best_idx   = int(np.argmin(total_errs))
+    best_bpm   = float(candidates[best_idx])
+    best_err   = float(total_errs[best_idx])
+
+    return best_bpm, best_err, t0
 
 
-# ── BPM refinement ────────────────────────────────────────────────────────────
+# ── Downbeat detection ────────────────────────────────────────────────────────
 
-def refine_bpm(bpm_initial, beat_times):
+def detect_downbeat(beat_times, beat_act, time_sig=4):
     """
-    Refine the initial librosa BPM estimate.
+    Find which phase within the beat cycle is the musical downbeat (beat 1).
 
-    Steps
-    ──────
-    1. Compute a local BPM for every consecutive beat pair:
-           bpm_i = 60 / (t[i+1] − t[i])
-       Filter extreme outliers (intervals that imply >2.5× or <0.4× the
-       initial estimate) — these are artefacts of the beat tracker missing
-       or doubling beats, not real tempo changes.
+    The madmom RNN beat activation function captures rhythmic strength: values
+    are higher where beats land on strong metrical positions. Beat 1 of a bar
+    in common time (4/4) consistently has higher activation than beats 2–4.
 
-    2. Take the MEDIAN of the filtered local BPMs.
-       Why median and not mean?
-         • Mean is pulled towards outliers.  One badly tracked section can
-           shift the mean by several BPM.
-         • Median is the middle value: as long as >50% of beat intervals
-           are tracked correctly the median converges to the true tempo,
-           regardless of how wrong the outliers are.
+    We try all `time_sig` starting phases and pick the one whose beats score
+    highest on average against the beat activation:
 
-    3. Build a candidate set from initial + median + their halves, doubles,
-       and nearest integers.
+        phase k → beats at indices k, k+4, k+8, ...
+        score(k) = mean( beat_act[ frame_of(beats[j]) ] for j in phase_k )
 
-    4. Evaluate each candidate with grid_alignment_error().  The candidate
-       whose grid fits the actual beat timestamps most tightly wins.
+    The phase with the highest score is treated as beat 1.
 
-    5. Smart rounding: if the winner is within ±0.5 of an integer BPM,
-       prefer the integer unless it worsens the error by more than 5%.
-       This handles the common "99.4 → 99" case without forcing bad rounding
-       on genuinely fractional tempos.
+    Why this works:
+      The RNN was trained to distinguish downbeats from offbeats implicitly —
+      downbeats tend to coincide with stronger spectral events (kick, chord
+      changes) which produce higher activation. The phase that consistently
+      aligns with these strong positions is the musical "1".
 
-    Returns (refined_bpm: float, debug: dict)
+    Returns:
+      downbeat_offset  — time (s) of the first downbeat in the original audio
+      phase            — index within beat_times of that downbeat
     """
-    debug = {'bpm_initial': round(float(bpm_initial), 4)}
+    if len(beat_times) < time_sig:
+        return float(beat_times[0]) if len(beat_times) > 0 else 0.0, 0
 
-    # ── Step 1: local BPM estimates ──────────────────────────────────────────
-    local_bpms = []
-    for i in range(len(beat_times) - 1):
-        dt = float(beat_times[i + 1]) - float(beat_times[i])
-        if dt >= MIN_BEAT_GAP:
-            local_bpms.append(60.0 / dt)
+    # Look up activation strength at each beat's frame
+    strengths = np.array([
+        float(beat_act[max(0, min(int(round(t * MADMOM_FPS)), len(beat_act) - 1))])
+        for t in beat_times
+    ])
 
-    # Filter: keep only values plausibly close to the initial estimate
-    filtered = [b for b in local_bpms
-                if bpm_initial * 0.4 <= b <= bpm_initial * 2.5]
+    best_phase = 0
+    best_score = -1.0
 
-    # ── Step 2: median BPM ───────────────────────────────────────────────────
-    if len(filtered) >= 4:
-        bpm_median = float(np.median(filtered))
-    else:
-        bpm_median = bpm_initial   # not enough data — fall back
+    for k in range(time_sig):
+        indices = list(range(k, len(beat_times), time_sig))
+        if not indices:
+            continue
+        score = float(np.mean(strengths[indices]))
+        if score > best_score:
+            best_score = score
+            best_phase = k
 
-    debug['bpm_median']         = round(bpm_median, 4)
-    debug['beat_count']         = len(beat_times)
-    debug['local_bpm_count']    = len(filtered)
-
-    # ── Step 3: candidate set ────────────────────────────────────────────────
-    raw = set()
-    for base in (bpm_initial, bpm_median):
-        raw.add(base)
-        raw.add(float(round(base)))          # nearest integer
-        half   = base / 2
-        double = base * 2
-        if 60 <= half   <= 320: raw.add(half);   raw.add(float(round(half)))
-        if 60 <= double <= 320: raw.add(double); raw.add(float(round(double)))
-
-    candidates = sorted({c for c in raw if 60.0 <= c <= 320.0})[:MAX_CANDIDATES]
-
-    # ── Step 4: evaluate candidates ──────────────────────────────────────────
-    scored = [(c, grid_alignment_error(c, beat_times)) for c in candidates]
-    scored.sort(key=lambda x: x[1])
-
-    best_bpm, best_err = scored[0]
-
-    # ── Step 5: smart integer rounding ───────────────────────────────────────
-    rounded = float(round(best_bpm))
-    if abs(rounded - best_bpm) <= 0.5 and 60 <= rounded <= 320:
-        err_rounded = grid_alignment_error(rounded, beat_times)
-        # Accept rounding if it doesn't worsen the error by more than 5%
-        if err_rounded <= best_err * 1.05:
-            if rounded != best_bpm:
-                debug['rounding_applied'] = f"{round(best_bpm, 4)} → {rounded}"
-            best_bpm = rounded
-            best_err = err_rounded
-
-    debug['bpm_final']   = round(best_bpm, 4)
-    debug['best_error']  = round(best_err, 6)
-    debug['candidates']  = [
-        {'bpm': round(c, 4), 'error': round(e, 6)}
-        for c, e in scored[:8]     # top 8 for readability
-    ]
-
-    return best_bpm, debug
+    downbeat_offset = float(beat_times[best_phase])
+    return downbeat_offset, best_phase
 
 
-# ── First-beat onset detection ────────────────────────────────────────────────
+# ── First onset detection ─────────────────────────────────────────────────────
 
-def detect_first_beat(y, sr, beat_times):
+def detect_first_onset(audio_path, beat_times):
     """
-    Find the first strong transient after 50ms.
-    Uses onset detection with backtracking to snap to the true attack.
-    Falls back to the first librosa beat if no onset is found.
+    Detect the first strong transient using madmom's onset processor.
+    Kept for informational purposes — silence is now anchored to downbeat_offset.
     """
-    import librosa
-
-    onset_env   = librosa.onset.onset_strength(y=y, sr=sr)
-    onset_times = librosa.onset.onset_detect(
-        onset_envelope=onset_env,
-        sr=sr,
-        units='time',
-        backtrack=True,
-        pre_max=3, post_max=3,
-        pre_avg=3, post_avg=5,
-        delta=0.15,
-        wait=10
-    )
-
-    for t in onset_times:
-        if float(t) > 0.05:
-            return float(t)
-
-    if len(beat_times) > 0:
-        return float(beat_times[0])
-
-    return 0.0
+    try:
+        from madmom.features.onsets import RNNOnsetProcessor, OnsetPeakPickingProcessor
+        onset_act = RNNOnsetProcessor()(audio_path)
+        onsets    = OnsetPeakPickingProcessor(fps=100, threshold=0.3)(onset_act)
+        for t in onsets:
+            if float(t) > 0.05:
+                return float(t)
+    except Exception as e:
+        print(f"[analyze] onset fallback: {e}", file=sys.stderr)
+    return float(beat_times[0]) if len(beat_times) > 0 else 0.0
 
 
-# ── Main entry point ──────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def analyze(audio_path):
-    import librosa
+    from madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor
 
-    # Load as mono at native sample rate
-    y, sr = librosa.load(audio_path, sr=None, mono=True)
+    # ── Beat tracking ─────────────────────────────────────────────────────────
+    print("[analyze] running madmom beat tracker…", file=sys.stderr)
+    beat_act   = RNNBeatProcessor()(audio_path)            # RNN activation curve
+    beats      = DBNBeatTrackingProcessor(fps=100)(beat_act)  # DBN beat timestamps
+    beat_times = [float(t) for t in beats]
 
-    # Initial beat tracking
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, units='time')
-    bpm_initial = float(np.atleast_1d(tempo)[0])
+    if len(beat_times) < 4:
+        raise ValueError(f"Too few beats detected: {len(beat_times)}")
 
-    # Sanity check: retry with fixed start_bpm if result is implausible
-    if not (40 <= bpm_initial <= 400):
-        tempo, beat_frames = librosa.beat.beat_track(
-            y=y, sr=sr, units='time', start_bpm=120, tightness=100
-        )
-        bpm_initial = float(np.atleast_1d(tempo)[0])
+    # ── Direct BPM optimization ───────────────────────────────────────────────
+    print("[analyze] optimizing BPM over beat grid…", file=sys.stderr)
+    bpm, alignment_error, beat_offset = optimize_bpm(beat_times)
 
-    beat_times = [float(t) for t in beat_frames]
+    # ── Downbeat detection ────────────────────────────────────────────────────
+    downbeat_offset, downbeat_phase = detect_downbeat(beat_times, beat_act)
 
-    # Refine BPM
-    refined_bpm, debug = refine_bpm(bpm_initial, beat_times)
+    # ── First onset (informational) ───────────────────────────────────────────
+    first_beat_time = detect_first_onset(audio_path, beat_times)
 
-    # First beat time in original audio
-    first_beat_time = detect_first_beat(y, sr, beat_times)
+    # ── Silence: anchored to downbeat, not just first onset ───────────────────
+    # This ensures the musical "1" falls on the beat grid after the silence.
+    silence_pad, total_offset = calc_silence_pad(downbeat_offset, bpm)
+    beat_dur = 60.0 / bpm
 
-    # Silence needed using refined BPM
-    silence_pad, total_offset = calc_silence_pad(first_beat_time, refined_bpm)
-    beat_dur = 60.0 / refined_bpm
-
-    # ── Debug log to stderr ───────────────────────────────────────────────────
-    print(f"[analyze] initial BPM  : {debug['bpm_initial']}", file=sys.stderr)
-    print(f"[analyze] median BPM   : {debug['bpm_median']}  "
-          f"(from {debug['local_bpm_count']} intervals, {debug['beat_count']} beats)",
-          file=sys.stderr)
-    if 'rounding_applied' in debug:
-        print(f"[analyze] rounding     : {debug['rounding_applied']}", file=sys.stderr)
-    print(f"[analyze] final BPM    : {debug['bpm_final']}  "
-          f"(error={debug['best_error']:.4f}s)",
-          file=sys.stderr)
-    print(f"[analyze] first beat   : {first_beat_time:.4f}s", file=sys.stderr)
-    print(f"[analyze] silence pad  : {silence_pad:.4f}s", file=sys.stderr)
-    print("[analyze] top candidates:", file=sys.stderr)
-    for c in debug['candidates'][:5]:
-        marker = " ← selected" if abs(c['bpm'] - debug['bpm_final']) < 0.001 else ""
-        print(f"           {c['bpm']:>9.4f} BPM  error={c['error']:.4f}s{marker}",
-              file=sys.stderr)
+    # ── Debug ─────────────────────────────────────────────────────────────────
+    print(f"[analyze] beats detected    : {len(beat_times)}", file=sys.stderr)
+    print(f"[analyze] BPM (optimized)   : {bpm:.4f}  (Σerror={alignment_error:.6f}s)", file=sys.stderr)
+    print(f"[analyze] beat_offset       : {beat_offset:.4f}s  (grid anchor = beats[0])", file=sys.stderr)
+    print(f"[analyze] downbeat_offset   : {downbeat_offset:.4f}s  (phase {downbeat_phase} / 4)", file=sys.stderr)
+    print(f"[analyze] first onset       : {first_beat_time:.4f}s", file=sys.stderr)
+    print(f"[analyze] silence pad       : {silence_pad:.6f}s  (anchored to downbeat)", file=sys.stderr)
+    print(f"[analyze] total offset      : {total_offset:.6f}s  (downbeat position in padded audio)", file=sys.stderr)
 
     return {
-        'bpm':             round(refined_bpm, 4),
-        'first_beat_time': round(first_beat_time, 4),
+        'bpm':             round(bpm, 4),
+        'beat_offset':     round(beat_offset, 6),
+        'downbeat_offset': round(downbeat_offset, 6),
+        'beat_duration':   round(beat_dur, 6),
+        'alignment_error': round(alignment_error, 6),
+        'first_beat_time': round(first_beat_time, 4),   # kept for compatibility
         'silence_pad':     round(silence_pad, 6),
         'final_offset':    round(total_offset, 6),
-        'beat_duration':   round(beat_dur, 6),
-        'debug':           debug
+        'debug': {
+            'beat_count':     len(beat_times),
+            'downbeat_phase': downbeat_phase,
+            'bpm_range':      f"{BPM_MIN}–{BPM_MAX}",
+            'bpm_step':       BPM_STEP,
+        }
     }
 
 
@@ -274,5 +262,7 @@ if __name__ == '__main__':
         result = analyze(sys.argv[1])
         print(json.dumps(result))
     except Exception as exc:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         print(json.dumps({'error': str(exc)}), file=sys.stderr)
         sys.exit(1)

@@ -496,6 +496,111 @@ body.macos #titlebar { padding-left: 80px; }
   padding-top: 8px;
 }
 
+/* ── Offset info ──────────────────────────────────────────────────────────── */
+.offset-info {
+  display:     flex;
+  gap:         20px;
+  width:       100%;
+  max-width:   560px;
+  min-height:  18px;
+}
+
+.offset-info:empty { display: none; }
+
+.offset-stat {
+  display:     flex;
+  align-items: baseline;
+  gap:         5px;
+}
+
+.offset-stat-label {
+  font-size:      10px;
+  font-weight:    500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color:          var(--text-muted);
+}
+
+.offset-stat-value {
+  font-size:            12px;
+  font-variant-numeric: tabular-nums;
+  color:                var(--text-secondary);
+  font-weight:          500;
+}
+
+/* ── Volume panel ─────────────────────────────────────────────────────────── */
+.volume-panel {
+  display:        flex;
+  flex-direction: column;
+  gap:            7px;
+  width:          100%;
+  max-width:      560px;
+}
+
+.volume-row {
+  display:     flex;
+  align-items: center;
+  gap:         10px;
+}
+
+.volume-label {
+  font-size:   12px;
+  font-weight: 500;
+  color:       var(--text-secondary);
+  width:       72px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.volume-slider {
+  flex:               1;
+  height:             3px;
+  appearance:         none;
+  -webkit-appearance: none;
+  background:         var(--border);
+  border-radius:      2px;
+  outline:            none;
+  cursor:             pointer;
+  /* dynamic fill set via JS inline style */
+}
+
+/* Webkit (Chrome/Safari/Electron) */
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width:         14px;
+  height:        14px;
+  border-radius: 50%;
+  background:    var(--accent);
+  cursor:        pointer;
+  transition:    box-shadow var(--tr), transform var(--tr);
+}
+.volume-slider:hover::-webkit-slider-thumb  { box-shadow: 0 0 0 4px var(--accent-glow); }
+.volume-slider:active::-webkit-slider-thumb { transform: scale(1.2); }
+
+/* Firefox */
+.volume-slider::-moz-range-thumb {
+  width:         14px;
+  height:        14px;
+  border-radius: 50%;
+  background:    var(--accent);
+  cursor:        pointer;
+  border:        none;
+}
+.volume-slider::-moz-range-track {
+  height:       3px;
+  background:   var(--border);
+  border-radius: 2px;
+}
+
+.volume-pct {
+  font-size:            12px;
+  font-variant-numeric: tabular-nums;
+  color:                var(--text-muted);
+  width:                36px;
+  text-align:           right;
+  flex-shrink:          0;
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    SHARED BUTTONS
    ══════════════════════════════════════════════════════════════════════════ */
@@ -518,6 +623,22 @@ body.macos #titlebar { padding-left: 80px; }
 .secondary-btn { background: var(--input-bg); color: var(--text-secondary); border: 1px solid var(--input-border); }
 .secondary-btn:hover  { background: var(--border); color: var(--text-primary); }
 .secondary-btn:active { background: var(--border-subtle); }
+
+/* ── Credits ──────────────────────────────────────────────────────────────── */
+.credits {
+  position:   fixed;
+  bottom:     10px;
+  right:      14px;
+  font-size:  10px;
+  color:      var(--text-muted);
+  opacity:    0.45;
+  z-index:    1;
+  pointer-events: none;
+  letter-spacing: 0.02em;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.credits-heart { color: var(--accent); }
 
 /* ══════════════════════════════════════════════════════════════════════════
    SETTINGS MODAL
@@ -566,3 +687,14 @@ input[type="text"] {
 }
 input[type="text"]:focus { border-color: var(--input-focus); box-shadow: 0 0 0 3px var(--accent-glow); }
 input[readonly] { cursor: default; color: var(--text-secondary); }
+
+.lang-select {
+  -webkit-user-select: text; user-select: text;
+  width: 100%; padding: 8px 10px;
+  font-size: 13px; color: var(--text-primary);
+  background: var(--input-bg); border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm); outline: none;
+  transition: border-color var(--tr), box-shadow var(--tr);
+  font-family: inherit; cursor: pointer;
+}
+.lang-select:focus { border-color: var(--input-focus); box-shadow: 0 0 0 3px var(--accent-glow); }

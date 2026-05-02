@@ -52,9 +52,9 @@ class AudioEngine {
     this.firstBeatTime = 0        // onset time of first beat in original audio (s)
     this.halfBeatShift = false
 
-    // Volume levels (adjustable before or after init)
-    this.songVolume    = 0.30     // deliberately low so metronome is dominant
-    this.metroVolume   = 0.80     // clearly audible above the track
+    // Volume levels (adjustable before or after init via setters below)
+    this.songVolume    = 0.75     // 75% — prominent but leaves room for metronome
+    this.metroVolume   = 1.00     // 100% — always clearly audible
 
     // Preprocessed waveform — built once in loadFile
     this.waveformData  = null     // Float32Array of normalised peak amplitudes
@@ -177,6 +177,24 @@ class AudioEngine {
       this._stopScheduler()
       this._startScheduler()
     }
+  }
+
+  /**
+   * Set song playback volume in real time.
+   * @param {number} v  0.0 – 1.0
+   */
+  setSongVolume(v) {
+    this.songVolume = v
+    if (this._songGain) this._songGain.gain.value = v
+  }
+
+  /**
+   * Set metronome click volume in real time.
+   * @param {number} v  0.0 – 1.0
+   */
+  setMetroVolume(v) {
+    this.metroVolume = v
+    if (this._metroGain) this._metroGain.gain.value = v
   }
 
   /** Toggle half-beat grid shift. Re-syncs scheduler immediately. */

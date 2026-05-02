@@ -30,9 +30,51 @@ const cancelBtn    = document.getElementById('cancel-btn')
 const saveBtn      = document.getElementById('save-btn')
 const exportDirEl  = document.getElementById('export-dir')
 const mapperNameEl = document.getElementById('mapper-name')
+const langSelectEl = document.getElementById('lang-select')
 
 // ── File extension guard ──────────────────────────────────────────────────
 const ALLOWED_EXT = new Set(['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aif', '.aiff'])
+
+// ── Analysis loading messages ─────────────────────────────────────────────
+const ANALYSIS_MSGS = [
+  'Converting audio…',
+  'Decoding waveform…',
+  'Firing up the neural network…',
+  'Detecting beats…',
+  'Asking madmom nicely…',
+  'Running the RNN…',
+  'Crunching 16,000 BPM candidates…',
+  'Consulting the beat oracle…',
+  'Scanning for the downbeat…',
+  'Measuring grid alignment…',
+  'Finding beat 1…',
+  'Optimizing the tempo grid…',
+  'Almost done lying to you…',
+  'Counting every single beat…',
+  'Minimizing alignment error…',
+  'Detecting musical accents…',
+]
+
+let _analysisTimer = null
+
+function startAnalysisMessages(filename) {
+  let pool = [...tArr('analysis.msgs')].sort(() => Math.random() - 0.5)
+  let idx  = 0
+
+  function showNext() {
+    if (idx >= pool.length) { pool = [...tArr('analysis.msgs')].sort(() => Math.random() - 0.5); idx = 0 }
+    setDropState('processing', pool[idx++])
+    _analysisTimer = setTimeout(showNext, 1800 + Math.random() * 2000)
+  }
+
+  setDropState('processing', `Analyzing "${filename}"…`)
+  _analysisTimer = setTimeout(showNext, 1600)
+}
+
+function stopAnalysisMessages() {
+  clearTimeout(_analysisTimer)
+  _analysisTimer = null
+}
 
 function extOf(filename) {
   const i = filename.lastIndexOf('.')
@@ -88,10 +130,11 @@ dropZone.addEventListener('drop', async (e) => {
     return
   }
 
-  setDropState('processing', `Analyzing "${file.name}"…`)
+  startAnalysisMessages(file.name)
 
   // Phase 1: convert + detect BPM (fast — doesn't fetch anything yet)
   const res = await window.api.analyzeSong(file.path)
+  stopAnalysisMessages()
 
   if (!res.success) {
     setDropState('error', `Error: ${res.error}`)
@@ -110,12 +153,7 @@ dropZone.addEventListener('drop', async (e) => {
   })
 })
 
-// Pipeline progress while in the drop view (phase 1 steps)
-window.api.onProgress(({ step, msg }) => {
-  if (viewDrop.classList.contains('active')) {
-    statusBar.textContent = msg || step
-  }
-})
+// Pipeline progress (phase 2 steps reach bpm-view via its own listener)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // BPM VIEW — callbacks
@@ -144,14 +182,19 @@ BpmView.init({
 let savedSettings = {}
 
 async function loadSettings() {
-  savedSettings          = await window.api.getSettings()
-  exportDirEl.value      = savedSettings.exportDir  || ''
-  mapperNameEl.value     = savedSettings.mapperName || ''
+  savedSettings      = await window.api.getSettings()
+  exportDirEl.value  = savedSettings.exportDir  || ''
+  mapperNameEl.value = savedSettings.mapperName || ''
+  // Apply persisted language
+  const lang = savedSettings.language || 'system'
+  window.i18n.setLang(lang)
+  if (langSelectEl) langSelectEl.value = lang
 }
 
 function openSettings() {
   exportDirEl.value  = savedSettings.exportDir  || ''
   mapperNameEl.value = savedSettings.mapperName || ''
+  if (langSelectEl)  langSelectEl.value = savedSettings.language || 'system'
   modalOverlay.classList.remove('hidden')
   mapperNameEl.focus()
 }
@@ -161,10 +204,13 @@ function closeSettings() {
 }
 
 async function saveSettings() {
+  const newLang = langSelectEl ? langSelectEl.value : 'system'
   savedSettings = await window.api.saveSettings({
     exportDir:  exportDirEl.value.trim(),
-    mapperName: mapperNameEl.value.trim()
+    mapperName: mapperNameEl.value.trim(),
+    language:   newLang
   })
+  window.i18n.setLang(newLang)
   closeSettings()
 }
 

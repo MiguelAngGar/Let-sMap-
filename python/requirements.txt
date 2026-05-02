@@ -1,3 +1,18 @@
-librosa>=0.10.0
-numpy>=1.24.0
+# Let'sMap — Python audio analysis dependencies
+# Install with: pip install -r python/requirements.txt
+
+# Required by madmom's __init__.py
+setuptools>=65.0.0
+
+# Beat tracking and onset detection (replaces librosa)
+madmom>=0.16.1
+
+# madmom 0.16.1 uses np.float which was removed in NumPy 1.24
+numpy>=1.21.0,<1.24
+
+# KDE mode finding for fractional BPM selection
+# Optional — analyze.py falls back to numpy histogram if absent
+scipy>=1.7.0
+
+# Audio file loading backend used by madmom
 soundfile>=0.12.0

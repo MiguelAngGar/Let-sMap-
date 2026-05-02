@@ -32,8 +32,8 @@
             stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
         </svg>
       </div>
-      <p class="drop-headline">Drag your song here</p>
-      <p class="drop-hint">mp3 &nbsp;·&nbsp; wav &nbsp;·&nbsp; flac &nbsp;·&nbsp; ogg &nbsp;·&nbsp; m4a</p>
+      <p class="drop-headline" data-i18n="drop.headline">Drag your song here</p>
+      <p class="drop-hint" data-i18n="drop.hint">mp3 &nbsp;·&nbsp; wav &nbsp;·&nbsp; flac &nbsp;·&nbsp; ogg &nbsp;·&nbsp; m4a</p>
     </div>
     <p id="status-bar" aria-live="polite"></p>
   </div>
@@ -54,22 +54,43 @@
         <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
           <path d="M6.3 2.84A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.27l9.344-5.891a1.5 1.5 0 000-2.538L6.3 2.84z"/>
         </svg>
-        Play
+        <span data-i18n="bpm.play">Play</span>
       </button>
 
       <span id="time-display" class="time-display" aria-live="off">0:00 / 0:00</span>
 
       <div class="beat-area">
         <div id="beat-dot" aria-hidden="true"></div>
-        <span class="kb-hint">Space</span>
+        <span class="kb-hint" data-i18n="bpm.kb_hint">Space</span>
       </div>
     </div>
 
-    <!-- ── 3. BPM display + custom input ─────────────────────────────────── -->
+    <!-- ── 3. Offset info ────────────────────────────────────────────────── -->
+    <div id="offset-info" class="offset-info" aria-live="off"></div>
+
+    <!-- ── 3b. Volume controls ───────────────────────────────────────────── -->
+    <div class="volume-panel">
+      <div class="volume-row">
+        <span class="volume-label" data-i18n="vol.song">Song</span>
+        <input type="range" id="song-volume" class="volume-slider"
+               min="0" max="100" value="75" step="1"
+               aria-label="Song volume (0–100%)">
+        <span id="song-vol-pct" class="volume-pct">75%</span>
+      </div>
+      <div class="volume-row">
+        <span class="volume-label" data-i18n="vol.metro">Metronome</span>
+        <input type="range" id="metro-volume" class="volume-slider"
+               min="0" max="100" value="100" step="1"
+               aria-label="Metronome volume (0–100%)">
+        <span id="metro-vol-pct" class="volume-pct">100%</span>
+      </div>
+    </div>
+
+    <!-- ── 4. BPM display + custom input ─────────────────────────────────── -->
     <div class="bpm-hero">
       <div class="bpm-number-row">
         <span id="bpm-value" class="bpm-number">—</span>
-        <span class="bpm-unit">BPM</span>
+        <span class="bpm-unit" data-i18n="bpm.unit">BPM</span>
       </div>
 
       <div class="custom-bpm-wrap">
@@ -78,6 +99,7 @@
           id="custom-bpm-input"
           class="custom-bpm-input"
           min="60" max="320" step="0.5"
+          data-i18n-ph="bpm.custom.placeholder"
           placeholder="Custom…"
           aria-label="Enter custom BPM (60–320), press Enter to apply"
           autocomplete="off"
@@ -87,31 +109,31 @@
       </div>
     </div>
 
-    <!-- ── 4. Candidates ─────────────────────────────────────────────────── -->
+    <!-- ── 5. Candidates ─────────────────────────────────────────────────── -->
     <section class="bpm-section">
-      <h3 class="section-label">Candidates</h3>
+      <h3 class="section-label" data-i18n="bpm.section.candidates">Candidates</h3>
       <div id="candidates-list" class="candidates-list" role="listbox" aria-label="BPM candidates"></div>
     </section>
 
-    <!-- ── 5. Modifiers ──────────────────────────────────────────────────── -->
+    <!-- ── 6. Modifiers ──────────────────────────────────────────────────── -->
     <section class="bpm-section">
-      <h3 class="section-label">Modifiers</h3>
+      <h3 class="section-label" data-i18n="bpm.section.modifiers">Modifiers</h3>
       <div class="modifiers-row">
-        <button id="halfbeat-btn" class="toggle-btn" aria-pressed="false">
-          Shift Grid&nbsp;+½&thinsp;Beat
-        </button>
-        <button id="double-btn" class="toggle-btn" aria-pressed="false">
-          Double BPM
-        </button>
+        <button id="halfbeat-btn" class="toggle-btn" aria-pressed="false"
+                data-i18n="bpm.mod.halfbeat">Shift Grid&nbsp;+½&thinsp;Beat</button>
+        <button id="double-btn" class="toggle-btn" aria-pressed="false"
+                data-i18n="bpm.mod.double">Double BPM</button>
       </div>
     </section>
 
-    <!-- ── 6. Status + actions ───────────────────────────────────────────── -->
+    <!-- ── 7. Status + actions ───────────────────────────────────────────── -->
     <p id="bpm-status" class="bpm-status" aria-live="polite"></p>
 
     <div class="bpm-actions">
-      <button id="bpm-cancel-btn" class="secondary-btn">Cancel</button>
-      <button id="create-map-btn" class="primary-btn">Create Map →</button>
+      <button id="bpm-cancel-btn" class="secondary-btn"
+              data-i18n="bpm.cancel">Cancel</button>
+      <button id="create-map-btn" class="primary-btn"
+              data-i18n="bpm.create">Create Map →</button>
     </div>
 
   </div>
@@ -123,7 +145,7 @@
     <div id="settings-modal">
 
       <div class="modal-header">
-        <h2 id="modal-title">Settings</h2>
+        <h2 id="modal-title" data-i18n="settings.title">Settings</h2>
         <button id="modal-close" class="icon-btn" aria-label="Close settings">
           <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
             <path fill-rule="evenodd" clip-rule="evenodd"
@@ -134,30 +156,51 @@
 
       <div class="modal-body">
         <div class="field">
-          <label for="export-dir">Export folder</label>
+          <label for="export-dir" data-i18n="settings.export_dir">Export folder</label>
           <div class="folder-row">
             <input type="text" id="export-dir" readonly placeholder="~/Documents/BeatSaberMaps">
-            <button id="browse-btn" class="secondary-btn">Browse…</button>
+            <button id="browse-btn" class="secondary-btn"
+                    data-i18n="settings.browse">Browse…</button>
           </div>
-          <p class="field-hint">Beat Saber project folders are saved here.</p>
+          <p class="field-hint" data-i18n="settings.export_hint">Beat Saber project folders are saved here.</p>
         </div>
         <div class="field">
-          <label for="mapper-name">Mapper name</label>
-          <input type="text" id="mapper-name" placeholder="YourName" maxlength="64"
+          <label for="mapper-name" data-i18n="settings.mapper">Mapper name</label>
+          <input type="text" id="mapper-name" maxlength="64"
+            data-i18n-ph="settings.mapper_ph" placeholder="YourName"
             autocomplete="off" spellcheck="false">
-          <p class="field-hint">Written into Info.dat as the level author.</p>
+          <p class="field-hint" data-i18n="settings.mapper_hint">Written into Info.dat as the level author.</p>
+        </div>
+        <div class="field">
+          <label for="lang-select" data-i18n="settings.language">Language</label>
+          <select id="lang-select" class="lang-select">
+            <option value="system">System (English)</option>
+            <option value="en">English</option>
+            <option value="es">Español</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="pt">Português</option>
+          </select>
         </div>
       </div>
 
       <div class="modal-footer">
-        <button id="cancel-btn" class="secondary-btn">Cancel</button>
-        <button id="save-btn" class="primary-btn">Save</button>
+        <button id="cancel-btn" class="secondary-btn"
+                data-i18n="settings.cancel">Cancel</button>
+        <button id="save-btn" class="primary-btn"
+                data-i18n="settings.save">Save</button>
       </div>
 
     </div>
   </div>
 
-  <!-- Load order matters: engine → timeline → bpm-view → app -->
+  <!-- ── Credits ────────────────────────────────────────────────────────────── -->
+  <div class="credits" aria-hidden="true">
+    <span data-i18n="credits.made">Made with</span>&nbsp;<span class="credits-heart">♥</span>&nbsp;Cobayo&nbsp;·&nbsp;2026
+  </div>
+
+  <!-- Load order: i18n first, then engine → timeline → bpm-view → app -->
+  <script src="i18n.js"></script>
   <script src="audio-engine.js"></script>
   <script src="timeline.js"></script>
   <script src="bpm-view.js"></script>

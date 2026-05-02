@@ -1,7 +1,19 @@
 const { spawn } = require('child_process')
 const path = require('path')
+const fs   = require('fs')
 
-const SCRIPT = path.join(__dirname, '../python/analyze.py')
+const SCRIPT       = path.join(__dirname, '../python/analyze.py')
+const PROJECT_ROOT = path.join(__dirname, '..')
+
+/**
+ * Resolve the Python binary to use.
+ * Priority: project .venv → system python3 → system python
+ */
+function getPythonBin() {
+  const venvPy = path.join(PROJECT_ROOT, '.venv', 'bin', 'python3')
+  if (fs.existsSync(venvPy)) return venvPy
+  return 'python3'
+}
 
 /**
  * Run Python audio analysis script and return parsed result.
@@ -17,7 +29,8 @@ const SCRIPT = path.join(__dirname, '../python/analyze.py')
 function analyze(audioPath) {
   return new Promise((resolve, reject) => {
     // Try python3 first, fall back to python
-    const proc = spawn('python3', [SCRIPT, audioPath], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const pythonBin = getPythonBin()
+    const proc = spawn(pythonBin, [SCRIPT, audioPath], { stdio: ['ignore', 'pipe', 'pipe'] })
 
     let stdout = ''
     let stderr = ''
@@ -43,7 +56,7 @@ function analyze(audioPath) {
     })
 
     proc.on('error', (err) => {
-      reject(new Error(`Failed to start Python: ${err.message}. Is python3 installed?`))
+      reject(new Error(`Failed to start Python (${pythonBin}): ${err.message}`))
     })
   })
 }

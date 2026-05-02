@@ -74,12 +74,11 @@ async function run({
   mapperName,
   send = () => {}
 }) {
-  // 1. Recalculate silence with user-confirmed BPM + modifiers
-  const { silencePad } = calcSilencePad(
-    analysis.first_beat_time,
-    confirmedBpm,
-    halfBeatShift
-  )
+  // 1. Recalculate silence with user-confirmed BPM + modifiers.
+  // Anchor to downbeat_offset (musical beat 1) so the bar grid aligns correctly.
+  // Falls back to first_beat_time for older analysis objects that lack downbeat_offset.
+  const anchorTime = analysis.downbeat_offset ?? analysis.first_beat_time
+  const { silencePad } = calcSilencePad(anchorTime, confirmedBpm, halfBeatShift)
   send('silence', `Adding ${silencePad.toFixed(3)}s silence…`)
   const paddedPath = await converter.addSilence(oggPath, silencePad)
 

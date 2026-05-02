@@ -13,8 +13,11 @@ const pipeline = require('../pipeline/index')   // legacy full-run (kept for com
 const store = new Store({
   name: 'config',
   defaults: {
-    exportDir:  path.join(os.homedir(), 'Documents', 'BeatSaberMaps'),
-    mapperName: ''
+    exportDir:   path.join(os.homedir(), 'Documents', 'BeatSaberMaps'),
+    mapperName:  '',
+    songVolume:  75,
+    metroVolume: 100,
+    language:    'system'
   }
 })
 
@@ -69,8 +72,11 @@ function buildCandidates(bpm) {
 ipcMain.handle('settings:get', () => store.store)
 
 ipcMain.handle('settings:save', (_e, data) => {
-  if (typeof data.exportDir  === 'string') store.set('exportDir',  data.exportDir)
-  if (typeof data.mapperName === 'string') store.set('mapperName', data.mapperName)
+  if (typeof data.exportDir   === 'string') store.set('exportDir',   data.exportDir)
+  if (typeof data.mapperName  === 'string') store.set('mapperName',  data.mapperName)
+  if (typeof data.songVolume  === 'number') store.set('songVolume',  data.songVolume)
+  if (typeof data.metroVolume === 'number') store.set('metroVolume', data.metroVolume)
+  if (typeof data.language    === 'string') store.set('language',    data.language)
   return store.store
 })
 

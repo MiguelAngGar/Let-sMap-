@@ -43,11 +43,60 @@ const BpmView = (() => {
   }
 
   // ── Audio engine lifecycle ─────────────────────────────────────────────────
+  // ── Loading messages ───────────────────────────────────────────────────────
+
+  let _loadingTimer = null
+
+  function _startLoadingMessages(el) {
+    if (!el) return
+    let pool = [...tArr('audio.msgs')].sort(() => Math.random() - 0.5)
+    let idx  = 0
+
+    function showNext() {
+      if (idx >= pool.length) { pool = [...tArr('audio.msgs')].sort(() => Math.random() - 0.5); idx = 0 }
+      el.textContent = pool[idx++]
+      _loadingTimer  = setTimeout(showNext, 1800 + Math.random() * 2000)  // 1.8–3.8 s
+    }
+
+    el.textContent = tArr('audio.msgs')[0] || 'Loading audio…'
+    _loadingTimer  = setTimeout(showNext, 1800)
+  }
+
+  function _stopLoadingMessages() {
+    clearTimeout(_loadingTimer)
+    _loadingTimer = null
+  }
+
+  // ── Volume helpers ─────────────────────────────────────────────────────────
+
+  function _updateSliderFill(slider) {
+    // Paint the left portion of the track in accent colour via inline gradient.
+    // Uses --accent-rgb if defined; falls back to a hardcoded purple.
+    const pct = slider.value + '%'
+    slider.style.background =
+      `linear-gradient(to right, var(--accent) 0%, var(--accent) ${pct}, var(--border) ${pct}, var(--border) 100%)`
+  }
+
+  function _readVolumes() {
+    const sv = $('song-volume')
+    const mv = $('metro-volume')
+    return {
+      song:  sv ? parseInt(sv.value)  / 100 : 0.75,
+      metro: mv ? parseInt(mv.value) / 100 : 1.00
+    }
+  }
+
+  // ── Audio engine lifecycle ─────────────────────────────────────────────────
   function _initEngine() {
     if (_engine) { _engine.destroy(); _engine = null }
     if (_timeline) { _timeline.deactivate(); _timeline = null }
 
     _engine = new AudioEngine()
+
+    // Apply whatever the sliders currently show (persists across show() calls)
+    const vols = _readVolumes()
+    _engine.songVolume  = vols.song
+    _engine.metroVolume = vols.metro
 
     _engine.onBeat = () => {
       const dot = $('beat-dot')
@@ -78,6 +127,21 @@ const BpmView = (() => {
     _timeline.activate()
   }
 
+  // ── Offset calculation (mirrors phase2.js calcSilencePad) ─────────────────
+
+  function _computePad(bpm, halfBeat) {
+    if (!_analysis) return null
+    const anchor  = _analysis.downbeat_offset ?? _analysis.first_beat_time ?? 0
+    const beatDur = 60.0 / bpm
+    const MIN_LEAD = 1.5
+    let n          = Math.ceil((anchor + MIN_LEAD) / beatDur)
+    let total      = n * beatDur
+    let pad        = total - anchor
+    if (pad < MIN_LEAD) { n++; total = n * beatDur; pad = total - anchor }
+    if (halfBeat) { pad += beatDur / 2; total += beatDur / 2 }
+    return { pad, total, n, beatDur, halfBeat }
+  }
+
   // ── Render helpers ─────────────────────────────────────────────────────────
 
   function _renderBpmDisplay() {
@@ -106,11 +170,11 @@ const BpmView = (() => {
     if (!btn) return
 
     if (playing) {
-      btn.innerHTML  = `<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><rect x="5" y="4" width="3" height="12" rx="1"/><rect x="12" y="4" width="3" height="12" rx="1"/></svg>Pause`
-      btn.setAttribute('aria-label', 'Pause')
+      btn.innerHTML  = `<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><rect x="5" y="4" width="3" height="12" rx="1"/><rect x="12" y="4" width="3" height="12" rx="1"/></svg><span data-i18n="bpm.pause">${t('bpm.pause')}</span>`
+      btn.setAttribute('aria-label', t('bpm.pause'))
     } else {
-      btn.innerHTML  = `<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6.3 2.84A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.27l9.344-5.891a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>Play`
-      btn.setAttribute('aria-label', 'Play')
+      btn.innerHTML  = `<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6.3 2.84A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.27l9.344-5.891a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg><span data-i18n="bpm.play">${t('bpm.play')}</span>`
+      btn.setAttribute('aria-label', t('bpm.play'))
     }
   }
 
@@ -133,10 +197,44 @@ const BpmView = (() => {
     if (inp) inp.value = ''   // clear after each selection
   }
 
+  function _renderOffsetInfo() {
+    const el = $('offset-info')
+    if (!el) return
+
+    const data = _computePad(effectiveBpm(), _halfBeat)
+    if (!data) { el.innerHTML = ''; return }
+
+    const fmt = ms => ms >= 1000
+      ? `${(ms / 1000).toFixed(3)} s`
+      : `${Math.round(ms)} ms`
+
+    const padMs   = data.pad   * 1000
+    const totalMs = data.total * 1000
+    const beats   = data.halfBeat
+      ? `${data.n} + ½`
+      : String(data.n)
+
+    el.innerHTML = `
+      <span class="offset-stat">
+        <span class="offset-stat-label">${t('offset.pad')}</span>
+        <span class="offset-stat-value">${fmt(padMs)}</span>
+      </span>
+      <span class="offset-stat">
+        <span class="offset-stat-label">${t('offset.beat1')}</span>
+        <span class="offset-stat-value">${fmt(totalMs)}</span>
+      </span>
+      <span class="offset-stat">
+        <span class="offset-stat-label">${t('offset.beats_added')}</span>
+        <span class="offset-stat-value">${beats}</span>
+      </span>
+    `
+  }
+
   function _render() {
     _renderBpmDisplay()
     _renderCandidates()
     _renderToggles()
+    _renderOffsetInfo()
     _renderPlayBtn(_engine?.isPlaying ?? false)
   }
 
@@ -201,8 +299,8 @@ const BpmView = (() => {
     const btn      = $('create-map-btn')
     const statusEl = $('bpm-status')
 
-    if (btn) { btn.disabled = true; btn.textContent = 'Creating…' }
-    if (statusEl) statusEl.textContent = 'Building Beat Saber folder…'
+    if (btn) { btn.disabled = true; btn.textContent = t('bpm.creating') }
+    if (statusEl) statusEl.textContent = t('bpm.building')
 
     const result = await window.api.createMap({
       oggPath:       _oggPath,
@@ -270,6 +368,52 @@ const BpmView = (() => {
       })
     }
 
+    // Volume sliders — real-time, no restart needed
+    const songVolSlider  = $('song-volume')
+    const metroVolSlider = $('metro-volume')
+    const songPctEl      = $('song-vol-pct')
+    const metroPctEl     = $('metro-vol-pct')
+
+    if (songVolSlider) {
+      _updateSliderFill(songVolSlider)
+      songVolSlider.addEventListener('input', () => {
+        const v = parseInt(songVolSlider.value) / 100
+        _engine?.setSongVolume(v)
+        if (songPctEl) songPctEl.textContent = `${songVolSlider.value}%`
+        _updateSliderFill(songVolSlider)
+      })
+      songVolSlider.addEventListener('change', () => {
+        window.api.saveSettings({ songVolume: parseInt(songVolSlider.value) })
+      })
+    }
+
+    if (metroVolSlider) {
+      _updateSliderFill(metroVolSlider)
+      metroVolSlider.addEventListener('input', () => {
+        const v = parseInt(metroVolSlider.value) / 100
+        _engine?.setMetroVolume(v)
+        if (metroPctEl) metroPctEl.textContent = `${metroVolSlider.value}%`
+        _updateSliderFill(metroVolSlider)
+      })
+      metroVolSlider.addEventListener('change', () => {
+        window.api.saveSettings({ metroVolume: parseInt(metroVolSlider.value) })
+      })
+    }
+
+    // Load persisted volume values
+    window.api.getSettings().then(s => {
+      if (songVolSlider && s.songVolume != null) {
+        songVolSlider.value = s.songVolume
+        if (songPctEl) songPctEl.textContent = `${s.songVolume}%`
+        _updateSliderFill(songVolSlider)
+      }
+      if (metroVolSlider && s.metroVolume != null) {
+        metroVolSlider.value = s.metroVolume
+        if (metroPctEl) metroPctEl.textContent = `${s.metroVolume}%`
+        _updateSliderFill(metroVolSlider)
+      }
+    })
+
     // Global space key
     document.addEventListener('keydown', _onKeyDown)
 
@@ -296,25 +440,29 @@ const BpmView = (() => {
     _doubled      = false
 
     _initEngine()
-    _engine.firstBeatTime = analysis.first_beat_time
+    // Use downbeat_offset as the metronome anchor so the click aligns to beat 1.
+    // Falls back to first_beat_time for backward compat.
+    _engine.firstBeatTime = analysis.downbeat_offset ?? analysis.first_beat_time
     _engine.setBPM(effectiveBpm())
 
     _render()
 
     const statusEl = $('bpm-status')
-    if (statusEl) statusEl.textContent = 'Loading audio…'
+    _startLoadingMessages(statusEl)
 
     // Load the ogg file and set up the timeline
     try {
       await _engine.loadFile(oggPath)   // blocks until decoded + waveform built
+      _stopLoadingMessages()
 
       // Timeline can only be created after engine has a buffer
       _initTimeline()
 
-      if (statusEl) statusEl.textContent = 'Press Play or Space to preview with metronome'
+      if (statusEl) statusEl.textContent = t('bpm.status.ready')
     } catch (err) {
+      _stopLoadingMessages()
       console.error('[bpm-view] audio load error:', err)
-      if (statusEl) statusEl.textContent = `Audio error: ${err.message}`
+      if (statusEl) statusEl.textContent = t('bpm.status.audio_error', { msg: err.message })
     }
   }
 
