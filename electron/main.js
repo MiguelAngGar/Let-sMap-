@@ -1,0 +1,153 @@
+const { app, BrowserWindow, ipcMain, dialog } = require('electron')
+const path   = require('path')
+const os     = require('os')
+const Store  = require('electron-store')
+
+const phase1   = require('../pipeline/phase1')
+const phase2   = require('../pipeline/phase2')
+const pipeline = require('../pipeline/index')   // legacy full-run (kept for compat)
+
+// ── Persistent settings ───────────────────────────────────────────────────────
+// macOS: ~/Library/Application Support/lets-map/config.json
+// Windows: %APPDATA%\lets-map\config.json
+const store = new Store({
+  name: 'config',
+  defaults: {
+    exportDir:  path.join(os.homedir(), 'Documents', 'BeatSaberMaps'),
+    mapperName: ''
+  }
+})
+
+// ── Window ────────────────────────────────────────────────────────────────────
+let win
+
+function createWindow() {
+  win = new BrowserWindow({
+    width:  820,
+    height: 580,
+    minWidth:  640,
+    minHeight: 480,
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    backgroundColor: '#0d0d0f',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+
+  win.loadFile(path.join(__dirname, '../renderer/index.html'))
+  // win.webContents.openDevTools()
+}
+
+app.whenReady().then(createWindow)
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Build an ordered list of probable BPM values around the detected one.
+ * Keeps the primary estimate plus half and double, clamped to [60, 320].
+ */
+function buildCandidates(bpm) {
+  const raw = [bpm / 2, bpm, bpm * 2]
+  // Add rounded integer if the detected value is noticeably fractional
+  const rounded = Math.round(bpm)
+  if (Math.abs(rounded - bpm) > 0.5) raw.push(rounded)
+
+  return [...new Set(
+    raw
+      .filter(b => b >= 60 && b <= 320)
+      .map(b => Math.round(b * 100) / 100)
+  )].sort((a, b) => a - b)
+}
+
+// ── IPC: settings ─────────────────────────────────────────────────────────────
+
+ipcMain.handle('settings:get', () => store.store)
+
+ipcMain.handle('settings:save', (_e, data) => {
+  if (typeof data.exportDir  === 'string') store.set('exportDir',  data.exportDir)
+  if (typeof data.mapperName === 'string') store.set('mapperName', data.mapperName)
+  return store.store
+})
+
+ipcMain.handle('settings:select-folder', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title:       'Select export folder',
+    properties:  ['openDirectory', 'createDirectory'],
+    defaultPath: store.get('exportDir')
+  })
+  return canceled ? null : filePaths[0]
+})
+
+// ── IPC: pipeline — phase 1 (analyze only) ───────────────────────────────────
+
+ipcMain.handle('song:analyze', async (event, filePath) => {
+  const senderWin = BrowserWindow.fromWebContents(event.sender)
+  const send = (step, msg) => senderWin?.webContents.send('pipeline-progress', { step, msg })
+
+  try {
+    send('convert', 'Converting audio…')
+    const { oggPath, analysis, originalName } = await phase1.run(filePath)
+    const candidates = buildCandidates(analysis.bpm)
+
+    return { success: true, oggPath, analysis, candidates, originalName }
+  } catch (err) {
+    console.error('[main] song:analyze error:', err)
+    return { success: false, error: err.message }
+  }
+})
+
+// ── IPC: pipeline — phase 2 (finalize with confirmed BPM) ────────────────────
+
+ipcMain.handle('song:create-map', async (event, {
+  oggPath,
+  analysis,
+  confirmedBpm,
+  halfBeatShift,
+  originalName
+}) => {
+  const senderWin = BrowserWindow.fromWebContents(event.sender)
+  const send = (step, msg) => {
+    console.log(`[${step}] ${msg}`)
+    senderWin?.webContents.send('pipeline-progress', { step, msg })
+  }
+
+  try {
+    const result = await phase2.run({
+      oggPath,
+      analysis,
+      confirmedBpm,
+      halfBeatShift,
+      originalName,
+      exportDir:  store.get('exportDir'),
+      mapperName: store.get('mapperName'),
+      send
+    })
+
+    send('done', `Done → ${result.outputDir}`)
+    return { success: true, result }
+  } catch (err) {
+    console.error('[main] song:create-map error:', err)
+    return { success: false, error: err.message }
+  }
+})
+
+// ── IPC: legacy full pipeline (used by process-song, kept for compatibility) ──
+
+ipcMain.handle('process-song', async (event, filePath) => {
+  const senderWin = BrowserWindow.fromWebContents(event.sender)
+  try {
+    const result = await pipeline.run(filePath, senderWin, {
+      exportDir:  store.get('exportDir'),
+      mapperName: store.get('mapperName')
+    })
+    return { success: true, result }
+  } catch (err) {
+    console.error('[main] process-song error:', err)
+    return { success: false, error: err.message }
+  }
+})
