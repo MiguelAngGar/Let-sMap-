@@ -1,7 +1,7 @@
 const axios = require('axios')
 
 const MB_URL    = 'https://musicbrainz.org/ws/2/recording/'
-const USER_AGENT = 'LetsMap/0.1 (miguelangel.garrido02@gmail.com)'
+const USER_AGENT = 'LetsMap/0.1 (https://github.com/MiguelAngGar/Let-sMap-)'
 
 // ── Confidence heuristics ────────────────────────────────────────────────────
 //
