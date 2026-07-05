@@ -1,0 +1,50 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#17131F"/>
+      <stop offset="1" stop-color="#0B0910"/>
+    </linearGradient>
+    <linearGradient id="pin" x1="0.15" y1="0.05" x2="0.9" y2="0.95">
+      <stop offset="0" stop-color="#9B6BFF"/>
+      <stop offset="1" stop-color="#7A45E6"/>
+    </linearGradient>
+    <linearGradient id="pinShade" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6E3ED6"/>
+      <stop offset="1" stop-color="#5A2FBF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- rounded square background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228" fill="url(#bg)"/>
+
+  <!-- pin side/depth shade -->
+  <path d="M540 150
+           C700 150 828 278 828 438
+           C828 560 745 645 560 850
+           L556 854
+           C371 645 288 560 288 438
+           C288 278 380 150 540 150 Z"
+        fill="url(#pinShade)" opacity="0.55"/>
+
+  <!-- main pin -->
+  <path d="M512 150
+           C672 150 800 278 800 438
+           C800 560 717 645 512 852
+           C307 645 224 560 224 438
+           C224 278 352 150 512 150 Z"
+        fill="url(#pin)"/>
+
+  <!-- pin hole -->
+  <circle cx="512" cy="430" r="118" fill="#120E1A"/>
+
+  <!-- waveform bars -->
+  <g fill="#B79BF7">
+    <rect x="250" y="892" width="46" height="66"  rx="23"/>
+    <rect x="330" y="874" width="46" height="102" rx="23"/>
+    <rect x="410" y="850" width="46" height="150" rx="23" fill="#9B6BFF"/>
+    <rect x="490" y="864" width="46" height="122" rx="23" fill="#9B6BFF"/>
+    <rect x="570" y="882" width="46" height="86"  rx="23"/>
+    <rect x="650" y="898" width="46" height="54"  rx="23"/>
+    <rect x="730" y="884" width="46" height="82"  rx="23"/>
+  </g>
+</svg>

@@ -10,6 +10,8 @@ release/
 build/
 !build/icon.icns
 !build/icon.ico
+!build/icon.png
+!build/icon_master.svg
 
 # Python
 __pycache__/
