@@ -1,5 +1,5 @@
 const axios = require('axios')
-const sharp  = require('sharp')
+const Jimp   = require('jimp')
 const path   = require('path')
 const os     = require('os')
 const fs     = require('fs')
@@ -36,10 +36,19 @@ async function fetch(artist, title) {
         timeout: 10000
       })
 
-      await sharp(Buffer.from(imgRes.data))
-        .resize(COVER_SIZE, COVER_SIZE, { fit: 'cover', position: 'centre' })
-        .jpeg({ quality: 90 })
-        .toFile(outPath)
+      const img = await Jimp.read(Buffer.from(imgRes.data))
+      // Cover crop: scale so both dimensions fill COVER_SIZE, then crop centre
+      const ratio = Math.max(COVER_SIZE / img.bitmap.width, COVER_SIZE / img.bitmap.height)
+      img
+        .resize(Math.round(img.bitmap.width * ratio), Math.round(img.bitmap.height * ratio))
+        .crop(
+          Math.floor((img.bitmap.width  - COVER_SIZE) / 2),
+          Math.floor((img.bitmap.height - COVER_SIZE) / 2),
+          COVER_SIZE,
+          COVER_SIZE
+        )
+        .quality(90)
+      await img.writeAsync(outPath)
 
       return outPath
     }
@@ -48,16 +57,9 @@ async function fetch(artist, title) {
   }
 
   // Fallback: dark grey placeholder
-  await sharp({
-    create: {
-      width: COVER_SIZE,
-      height: COVER_SIZE,
-      channels: 3,
-      background: { r: 28, g: 28, b: 32 }
-    }
-  })
-    .jpeg({ quality: 80 })
-    .toFile(outPath)
+  const placeholder = new Jimp(COVER_SIZE, COVER_SIZE, 0x1c1c20ff)
+  placeholder.quality(80)
+  await placeholder.writeAsync(outPath)
 
   return outPath
 }

@@ -19,9 +19,6 @@ contextBridge.exposeInMainWorld('api', {
   // Phase 2: finalize with confirmed BPM + modifiers → returns outputDir
   createMap: (data) => ipcRenderer.invoke('song:create-map', data),
 
-  // Legacy full-run (kept in case it's ever needed)
-  processSong: (filePath) => ipcRenderer.invoke('process-song', filePath),
-
   // Step-by-step progress events from the pipeline
   onProgress: (cb) => ipcRenderer.on('pipeline-progress', (_e, d) => cb(d)),
 

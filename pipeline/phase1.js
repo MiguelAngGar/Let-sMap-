@@ -21,7 +21,9 @@ async function run(inputPath) {
   const oggPath    = await converter.toOgg(inputPath)
   const analysis   = await analyzer.analyze(oggPath)
   const originalName = path.basename(inputPath, path.extname(inputPath))
-  return { oggPath, analysis, originalName }
+  // originalPath kept so phase2 can pad+encode from the source in ONE pass
+  // (avoids a second lossy vorbis generation)
+  return { oggPath, originalPath: inputPath, analysis, originalName }
 }
 
 module.exports = { run }

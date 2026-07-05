@@ -36,28 +36,13 @@ const langSelectEl = document.getElementById('lang-select')
 const ALLOWED_EXT = new Set(['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aif', '.aiff'])
 
 // ── Analysis loading messages ─────────────────────────────────────────────
-const ANALYSIS_MSGS = [
-  'Converting audio…',
-  'Decoding waveform…',
-  'Firing up the neural network…',
-  'Detecting beats…',
-  'Asking madmom nicely…',
-  'Running the RNN…',
-  'Crunching 16,000 BPM candidates…',
-  'Consulting the beat oracle…',
-  'Scanning for the downbeat…',
-  'Measuring grid alignment…',
-  'Finding beat 1…',
-  'Optimizing the tempo grid…',
-  'Almost done lying to you…',
-  'Counting every single beat…',
-  'Minimizing alignment error…',
-  'Detecting musical accents…',
-]
 
 let _analysisTimer = null
 
 function startAnalysisMessages(filename) {
+  // Clear any previously running timer before starting a new sequence
+  clearTimeout(_analysisTimer)
+
   let pool = [...tArr('analysis.msgs')].sort(() => Math.random() - 0.5)
   let idx  = 0
 
@@ -147,6 +132,7 @@ dropZone.addEventListener('drop', async (e) => {
   showView('bpm')
   await BpmView.show({
     oggPath:      res.oggPath,
+    originalPath: res.originalPath,
     analysis:     res.analysis,
     candidates:   res.candidates,
     originalName: res.originalName

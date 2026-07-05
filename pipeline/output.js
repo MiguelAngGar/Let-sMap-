@@ -51,7 +51,7 @@ async function generate({ audioPath, coverPath, meta, analysis, exportDir, mappe
     _songSubName:         '',
     _songAuthorName:      meta.artist || '',
     _levelAuthorName:     mapperName  || '',
-    _beatsPerMinute:      Math.round(analysis.bpm * 1000) / 1000,
+    _beatsPerMinute:      analysis.bpm,
     _shuffle:             0,
     _shufflePeriod:       0.5,
     _previewStartTime:    12,

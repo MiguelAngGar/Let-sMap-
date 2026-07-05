@@ -431,9 +431,9 @@ body.macos #titlebar { padding-left: 80px; }
 
 /* ── Candidate pills ─────────────────────────────────────────────────────── */
 .candidates-list {
-  display:  flex;
-  flex-wrap: wrap;
-  gap:      7px;
+  display:        flex;
+  flex-direction: column;
+  gap:            0;
 }
 .candidate-pill {
   padding:       6px 15px;
@@ -454,6 +454,38 @@ body.macos #titlebar { padding-left: 80px; }
   border-color: var(--accent);
   color:       #fff;
   box-shadow:  0 0 0 3px var(--accent-glow);
+}
+.candidate-pill.alt {
+  border-style: dashed;
+  opacity: 0.75;
+}
+.candidate-pill.alt:hover,
+.candidate-pill.alt.selected { opacity: 1; }
+
+/* ── Candidate groups (main = detected ½/1/2× | alts = madmom extras) ─── */
+.candidates-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.candidates-group + .candidates-group {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.candidates-group-label {
+  font-size:    10px;
+  font-weight:  600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:        var(--text-muted, var(--text-secondary));
+  opacity:      0.55;
+  user-select:  none;
+}
+.candidates-row {
+  display:   flex;
+  flex-wrap: wrap;
+  gap:       7px;
 }
 
 /* ── Modifier toggles ─────────────────────────────────────────────────────── */

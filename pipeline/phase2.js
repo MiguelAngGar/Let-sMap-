@@ -66,6 +66,7 @@ function calcSilencePad(firstBeatTime, bpm, halfBeatShift = false) {
  */
 async function run({
   oggPath,
+  originalPath,
   analysis,
   confirmedBpm,
   halfBeatShift,
@@ -80,7 +81,12 @@ async function run({
   const anchorTime = analysis.downbeat_offset ?? analysis.first_beat_time
   const { silencePad } = calcSilencePad(anchorTime, confirmedBpm, halfBeatShift)
   send('silence', `Adding ${silencePad.toFixed(3)}s silence…`)
-  const paddedPath = await converter.addSilence(oggPath, silencePad)
+  // Prefer single-pass pad+encode from the ORIGINAL file (one lossy generation).
+  // Fall back to padding the phase-1 ogg for older callers.
+  const fs = require('fs')
+  const paddedPath = (originalPath && fs.existsSync(originalPath))
+    ? await converter.padToOgg(originalPath, silencePad)
+    : await converter.addSilence(oggPath, silencePad)
 
   // 2. Metadata
   send('metadata', 'Fetching song metadata…')

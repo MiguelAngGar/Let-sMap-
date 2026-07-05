@@ -8,6 +8,8 @@ out/
 # Electron packager / builder
 release/
 build/
+!build/icon.icns
+!build/icon.ico
 
 # Python
 __pycache__/
@@ -16,6 +18,9 @@ __pycache__/
 .venv/
 venv/
 env/
+python/dist/
+python/build/
+*.spec
 
 # Temp audio files
 /tmp/letsmap/

@@ -23,13 +23,16 @@ const BpmView = (() => {
   let _engine       = null
   let _timeline     = null
   let _oggPath      = null
+  let _originalPath = null
   let _analysis     = null
   let _candidates   = []
   let _originalName = ''
 
-  let _baseBpm      = 120
-  let _halfBeat     = false
-  let _doubled      = false
+  let _baseBpm         = 120
+  let _halfBeat        = false
+  let _doubled         = false
+  let _mainCandidates  = []   // [bpm/2, bpm, bpm×2]
+  let _altCandidates   = []   // madmom extras
 
   let _onCreateMap  = null    // ({ outputDir }) => void
   let _onCancel     = null    // () => void
@@ -149,20 +152,51 @@ const BpmView = (() => {
     if (el) el.textContent = effectiveBpm().toFixed(2)
   }
 
+  function _makePill(bpm, isAlt = false) {
+    const pill = document.createElement('button')
+    const sel  = Math.round(bpm * 100) / 100 === Math.round(_baseBpm * 100) / 100
+    pill.className   = 'candidate-pill' + (isAlt ? ' alt' : '') + (sel ? ' selected' : '')
+    pill.textContent = bpm.toFixed(2)
+    pill.setAttribute('aria-pressed', sel ? 'true' : 'false')
+    pill.setAttribute('role', 'option')
+    pill.addEventListener('click', () => _selectBpm(bpm))
+    return pill
+  }
+
+  function _makeGroup(label, pills) {
+    const wrap = document.createElement('div')
+    wrap.className = 'candidates-group'
+    if (label) {
+      const lbl = document.createElement('span')
+      lbl.className   = 'candidates-group-label'
+      lbl.textContent = label
+      wrap.appendChild(lbl)
+    }
+    const row = document.createElement('div')
+    row.className = 'candidates-row'
+    pills.forEach(p => row.appendChild(p))
+    wrap.appendChild(row)
+    return wrap
+  }
+
   function _renderCandidates() {
     const container = $('candidates-list')
     if (!container) return
     container.innerHTML = ''
 
-    _candidates.forEach(bpm => {
-      const pill = document.createElement('button')
-      pill.className   = 'candidate-pill' + (bpm === _baseBpm ? ' selected' : '')
-      pill.textContent  = bpm.toFixed(2)
-      pill.setAttribute('aria-pressed', bpm === _baseBpm ? 'true' : 'false')
-      pill.setAttribute('role', 'option')
-      pill.addEventListener('click', () => _selectBpm(bpm))
-      container.appendChild(pill)
-    })
+    // Main group: bpm/2 · bpm · bpm×2  (labeled only when alts exist)
+    const hasAlts = _altCandidates.length > 0
+    const mainLabel = hasAlts ? t('bpm.candidates.main') : null
+    container.appendChild(
+      _makeGroup(mainLabel, _mainCandidates.map(b => _makePill(b)))
+    )
+
+    // Alt group: madmom extras with their own label
+    if (hasAlts) {
+      container.appendChild(
+        _makeGroup(t('bpm.candidates.alts'), _altCandidates.map(b => _makePill(b, true)))
+      )
+    }
   }
 
   function _renderPlayBtn(playing) {
@@ -241,8 +275,8 @@ const BpmView = (() => {
   // ── User actions ───────────────────────────────────────────────────────────
 
   function _selectBpm(bpm) {
-    _baseBpm = bpm
-    _doubled = false          // reset double — selecting a new candidate is explicit
+    _baseBpm = Math.round(bpm * 100) / 100
+    _doubled = false
     _engine.setBPM(effectiveBpm())
     _render()
     _renderCustomInput()
@@ -264,9 +298,9 @@ const BpmView = (() => {
 
     const rounded = Math.round(val * 100) / 100
 
-    // Add custom value to candidates list if not already there
-    if (!_candidates.includes(rounded)) {
-      _candidates = [..._candidates, rounded].sort((a, b) => a - b)
+    // Add to main candidates if not already present
+    if (!_mainCandidates.includes(rounded)) {
+      _mainCandidates = [..._mainCandidates, rounded].sort((a, b) => a - b)
     }
 
     _selectBpm(rounded)
@@ -304,13 +338,14 @@ const BpmView = (() => {
 
     const result = await window.api.createMap({
       oggPath:       _oggPath,
+      originalPath:  _originalPath,
       analysis:      _analysis,
       confirmedBpm:  effectiveBpm(),
       halfBeatShift: _halfBeat,
       originalName:  _originalName
     })
 
-    if (btn) { btn.disabled = false; btn.textContent = 'Create Map →' }
+    if (btn) { btn.disabled = false; btn.textContent = t('bpm.create') }
 
     if (result.success) {
       _onCreateMap?.(result.result)
@@ -430,14 +465,23 @@ const BpmView = (() => {
    * Populate state from fresh analysis and display the BPM validation view.
    * Loads audio in background — UI renders immediately without waiting.
    */
-  async function show({ oggPath, analysis, candidates, originalName }) {
-    _oggPath      = oggPath
-    _analysis     = analysis
-    _candidates   = [...candidates]
-    _originalName = originalName
-    _baseBpm      = analysis.bpm
-    _halfBeat     = false
-    _doubled      = false
+  async function show({ oggPath, originalPath, analysis, candidates, originalName }) {
+    // Stop any loading animation from a previous call before starting fresh
+    _stopLoadingMessages()
+
+    _oggPath         = oggPath
+    _originalPath    = originalPath || null
+    _analysis        = analysis
+    _originalName    = originalName
+    _halfBeat        = false
+    _doubled         = false
+
+    // candidates is { main, alternatives } — round to 2dp to match pill values
+    _mainCandidates  = (candidates.main         || []).map(b => Math.round(b * 100) / 100)
+    _altCandidates   = (candidates.alternatives || []).map(b => Math.round(b * 100) / 100)
+
+    // _baseBpm must match the rounded pill value so the selection highlights correctly
+    _baseBpm = Math.round(analysis.bpm * 100) / 100
 
     _initEngine()
     // Use downbeat_offset as the metronome anchor so the click aligns to beat 1.

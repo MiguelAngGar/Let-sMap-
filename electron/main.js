@@ -3,9 +3,8 @@ const path   = require('path')
 const os     = require('os')
 const Store  = require('electron-store')
 
-const phase1   = require('../pipeline/phase1')
-const phase2   = require('../pipeline/phase2')
-const pipeline = require('../pipeline/index')   // legacy full-run (kept for compat)
+const phase1 = require('../pipeline/phase1')
+const phase2 = require('../pipeline/phase2')
 
 // ── Persistent settings ───────────────────────────────────────────────────────
 // macOS: ~/Library/Application Support/lets-map/config.json
@@ -44,27 +43,34 @@ function createWindow() {
   // win.webContents.openDevTools()
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  createWindow()
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
+})
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
-app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/**
- * Build an ordered list of probable BPM values around the detected one.
- * Keeps the primary estimate plus half and double, clamped to [60, 320].
- */
-function buildCandidates(bpm) {
-  const raw = [bpm / 2, bpm, bpm * 2]
-  // Add rounded integer if the detected value is noticeably fractional
-  const rounded = Math.round(bpm)
-  if (Math.abs(rounded - bpm) > 0.5) raw.push(rounded)
+const round2 = b => Math.round(b * 100) / 100
 
-  return [...new Set(
-    raw
-      .filter(b => b >= 60 && b <= 320)
-      .map(b => Math.round(b * 100) / 100)
-  )].sort((a, b) => a - b)
+/**
+ * Build structured BPM candidates.
+ *
+ * Returns:
+ *   main         — [bpm/2, bpm, bpm×2] always shown as the primary group
+ *   alternatives — up to 2 madmom-ranked tempos that aren't multiples of main
+ */
+function buildCandidates(bpm, tempoCandidates = []) {
+  const main = [bpm / 2, bpm, bpm * 2]
+    .map(round2)
+    .filter(b => b >= 60 && b <= 350)
+
+  const alternatives = tempoCandidates
+    .map(round2)
+    .filter(b => b >= 60 && b <= 350 && !main.includes(b))
+    .slice(0, 2)
+
+  return { main, alternatives }
 }
 
 // ── IPC: settings ─────────────────────────────────────────────────────────────
@@ -97,10 +103,10 @@ ipcMain.handle('song:analyze', async (event, filePath) => {
 
   try {
     send('convert', 'Converting audio…')
-    const { oggPath, analysis, originalName } = await phase1.run(filePath)
-    const candidates = buildCandidates(analysis.bpm)
+    const { oggPath, originalPath, analysis, originalName } = await phase1.run(filePath)
+    const candidates = buildCandidates(analysis.bpm, analysis.tempo_candidates)
 
-    return { success: true, oggPath, analysis, candidates, originalName }
+    return { success: true, oggPath, originalPath, analysis, candidates, originalName }
   } catch (err) {
     console.error('[main] song:analyze error:', err)
     return { success: false, error: err.message }
@@ -111,6 +117,7 @@ ipcMain.handle('song:analyze', async (event, filePath) => {
 
 ipcMain.handle('song:create-map', async (event, {
   oggPath,
+  originalPath,
   analysis,
   confirmedBpm,
   halfBeatShift,
@@ -125,6 +132,7 @@ ipcMain.handle('song:create-map', async (event, {
   try {
     const result = await phase2.run({
       oggPath,
+      originalPath,
       analysis,
       confirmedBpm,
       halfBeatShift,
@@ -142,18 +150,3 @@ ipcMain.handle('song:create-map', async (event, {
   }
 })
 
-// ── IPC: legacy full pipeline (used by process-song, kept for compatibility) ──
-
-ipcMain.handle('process-song', async (event, filePath) => {
-  const senderWin = BrowserWindow.fromWebContents(event.sender)
-  try {
-    const result = await pipeline.run(filePath, senderWin, {
-      exportDir:  store.get('exportDir'),
-      mapperName: store.get('mapperName')
-    })
-    return { success: true, result }
-  } catch (err) {
-    console.error('[main] process-song error:', err)
-    return { success: false, error: err.message }
-  }
-})

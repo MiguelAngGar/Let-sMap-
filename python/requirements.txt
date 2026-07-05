@@ -13,6 +13,3 @@ numpy>=1.21.0,<1.24
 # KDE mode finding for fractional BPM selection
 # Optional — analyze.py falls back to numpy histogram if absent
 scipy>=1.7.0
-
-# Audio file loading backend used by madmom
-soundfile>=0.12.0
