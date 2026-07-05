@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron')
 const path   = require('path')
 const os     = require('os')
 const Store  = require('electron-store')
@@ -32,6 +32,7 @@ function createWindow() {
     minWidth:  640,
     minHeight: 480,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    autoHideMenuBar: true,
     backgroundColor: '#0d0d0f',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -46,6 +47,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Hide the File/Edit/View/Window/Help bar on Windows/Linux only.
+  // On macOS the menu lives in the system bar and holds standard shortcuts
+  // (Cmd+Q/C/V/W) — removing it there would break them.
+  if (process.platform !== 'darwin') Menu.setApplicationMenu(null)
   createWindow()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })

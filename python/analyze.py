@@ -79,6 +79,12 @@ BPM_MAX      = 300.0
 MADMOM_FPS   = 100
 SAMPLE_RATE  = 44100
 
+# Windows frozen builds use multiprocessing 'spawn': every madmom worker
+# re-launches the whole .exe and re-imports numpy/scipy/madmom, which costs
+# far more than the parallelism saves. Force single-thread on Windows.
+# macOS/Linux keep the default (parallel) behaviour.
+MADMOM_THREADS = 1 if sys.platform == 'win32' else None
+
 # Octave multipliers searched when correcting half/double-time.
 OCTAVE_MULTIPLIERS = [0.25, 1/3, 0.5, 2/3, 1.0, 4/3, 1.5, 2.0, 3.0, 4.0]
 
@@ -418,7 +424,7 @@ def detect_downbeat(beat_times, beat_act, time_sig=4):
 def detect_first_onset(sig, beat_times):
     try:
         from madmom.features.onsets import RNNOnsetProcessor, OnsetPeakPickingProcessor
-        onset_act = RNNOnsetProcessor()(sig)
+        onset_act = RNNOnsetProcessor(num_threads=MADMOM_THREADS)(sig)
         onsets    = OnsetPeakPickingProcessor(fps=MADMOM_FPS, threshold=0.3)(onset_act)
         for t in onsets:
             if float(t) > 0.05:
@@ -660,7 +666,7 @@ def analyze(audio_path):
 
     # 2. Beat activation (cached and reused for tempo + DBN + downbeat)
     print("[analyze] running RNN beat activation…", file=sys.stderr)
-    beat_act = RNNBeatProcessor()(sig)
+    beat_act = RNNBeatProcessor(num_threads=MADMOM_THREADS)(sig)
 
     # 3. Tempo anchor (octave-correct, autocorr-based)
     print("[analyze] estimating tempo anchor…", file=sys.stderr)

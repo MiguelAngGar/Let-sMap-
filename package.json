@@ -23,7 +23,8 @@
       "node_modules/**/*",
       "!python/.venv/**/*",
       "!python/**/__pycache__/**/*",
-      "!**/*.py[cod]"
+      "!**/*.pyc",
+      "!**/*.pyo"
     ],
     "mac": {
       "target": [
