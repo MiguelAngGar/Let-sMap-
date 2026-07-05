@@ -25,12 +25,15 @@ function uniqueDir(base) {
  * @param {{ bpm, final_offset }} opts.analysis
  * @param {string} opts.exportDir
  * @param {string} opts.mapperName
+ * @param {string} [opts.fallbackName]  Folder name when title+artist are both empty
  * @returns {{ outputDir: string }}
  */
-async function generate({ audioPath, coverPath, meta, analysis, exportDir, mapperName }) {
-  // Build a clean folder name: "Artist - Title" or just "Title"
+async function generate({ audioPath, coverPath, meta, analysis, exportDir, mapperName, fallbackName }) {
+  // Build a clean folder name: "Artist - Title", "Title", or original filename
   const parts = [meta.artist, meta.title].filter(Boolean).map(sanitize)
-  const folderName = parts.length > 1 ? parts.join(' - ') : (parts[0] || 'Unknown Song')
+  const folderName = parts.length > 1
+    ? parts.join(' - ')
+    : (parts[0] || sanitize(fallbackName || 'Unknown Song'))
   const outputDir  = uniqueDir(path.join(exportDir, folderName))
 
   fs.mkdirSync(outputDir, { recursive: true })

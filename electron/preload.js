@@ -16,7 +16,14 @@ contextBridge.exposeInMainWorld('api', {
   // Phase 1: convert + analyze → returns oggPath, analysis, candidates
   analyzeSong: (filePath) => ipcRenderer.invoke('song:analyze', filePath),
 
-  // Phase 2: finalize with confirmed BPM + modifiers → returns outputDir
+  // Metadata lookup + confidence check (runs after BPM confirmation)
+  fetchMeta: (originalName) => ipcRenderer.invoke('song:fetch-meta', originalName),
+
+  // Open image picker → returns processed 512×512 cover path, or null
+  selectCover: () => ipcRenderer.invoke('meta:select-cover'),
+
+  // Phase 2: finalize with confirmed BPM + modifiers (+ optional meta/cover
+  // overrides from the confirmation screen) → returns outputDir
   createMap: (data) => ipcRenderer.invoke('song:create-map', data),
 
   // Step-by-step progress events from the pipeline

@@ -139,6 +139,58 @@
   </div>
 
   <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- VIEW 3 — Metadata confirmation (only when auto-detection is unsure)    -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div id="view-meta" class="view">
+
+    <div class="meta-card">
+      <h2 class="meta-heading" data-i18n="meta.heading">Confirm song info</h2>
+      <p class="meta-subtitle" data-i18n="meta.subtitle">Couldn't identify this song with confidence. Check the details or fill them in yourself.</p>
+
+      <div class="meta-cover-row">
+        <div class="meta-cover-box" aria-hidden="true">
+          <img id="meta-cover-img" class="hidden" alt="">
+          <div id="meta-cover-empty" class="meta-cover-empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 18V5l12-2v13"/>
+              <circle cx="6" cy="18" r="3"/>
+              <circle cx="18" cy="16" r="3"/>
+            </svg>
+          </div>
+        </div>
+        <div class="meta-cover-btns">
+          <button id="meta-cover-change" class="secondary-btn"
+                  data-i18n="meta.cover.change">Choose image…</button>
+          <button id="meta-cover-remove" class="secondary-btn"
+                  data-i18n="meta.cover.remove">Remove</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="meta-title" data-i18n="meta.field.title">Song title</label>
+        <input type="text" id="meta-title" maxlength="128" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="meta-artist" data-i18n="meta.field.artist">Artist</label>
+        <input type="text" id="meta-artist" maxlength="128" autocomplete="off" spellcheck="false">
+      </div>
+
+      <p class="field-hint" data-i18n="meta.hint">Empty fields can be filled in later in your map editor.</p>
+    </div>
+
+    <p id="meta-status" class="bpm-status" aria-live="polite"></p>
+
+    <div class="bpm-actions">
+      <button id="meta-back-btn" class="secondary-btn"
+              data-i18n="meta.back">← Back</button>
+      <button id="meta-create-btn" class="primary-btn"
+              data-i18n="meta.create">Create Map →</button>
+    </div>
+
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
   <!-- Settings modal                                                          -->
   <!-- ══════════════════════════════════════════════════════════════════════ -->
   <div id="modal-overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -199,11 +251,12 @@
     <span data-i18n="credits.made">Made with</span>&nbsp;<span class="credits-heart">♥</span>&nbsp;Cobayo&nbsp;·&nbsp;2026
   </div>
 
-  <!-- Load order: i18n first, then engine → timeline → bpm-view → app -->
+  <!-- Load order: i18n first, then engine → timeline → bpm-view → meta-view → app -->
   <script src="i18n.js"></script>
   <script src="audio-engine.js"></script>
   <script src="timeline.js"></script>
   <script src="bpm-view.js"></script>
+  <script src="meta-view.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -9,7 +9,7 @@
  * Delegates audio + metronome to BpmView (bpm-view.js / audio-engine.js).
  */
 
-/* global BpmView */
+/* global BpmView, MetaView */
 
 // ── Platform ──────────────────────────────────────────────────────────────
 if (window.api.platform === 'darwin') {
@@ -19,6 +19,7 @@ if (window.api.platform === 'darwin') {
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const viewDrop     = document.getElementById('view-drop')
 const viewBpm      = document.getElementById('view-bpm')
+const viewMeta     = document.getElementById('view-meta')
 const dropZone     = document.getElementById('drop-zone')
 const statusBar    = document.getElementById('status-bar')
 
@@ -73,6 +74,7 @@ function extOf(filename) {
 function showView(name) {
   viewDrop.classList.toggle('active', name === 'drop')
   viewBpm.classList.toggle('active',  name === 'bpm')
+  viewMeta?.classList.toggle('active', name === 'meta')
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -145,20 +147,38 @@ dropZone.addEventListener('drop', async (e) => {
 // BPM VIEW — callbacks
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Shared success handler — map folder generated
+function onMapCreated(result) {
+  BpmView.hide()
+  showView('drop')
+  setDropState('success', `✓ Ready — ${result.outputDir}`)
+  setTimeout(() => setDropState(''), 8000)
+}
+
 BpmView.init({
-  // User clicked "Create Map" — phase 2 completed successfully
-  onCreateMap: (result) => {
-    showView('drop')
-    setDropState('success', `✓ Ready — ${result.outputDir}`)
-    setTimeout(() => setDropState(''), 8000)
-  },
+  // User clicked "Create Map" — confident match, phase 2 completed
+  onCreateMap: onMapCreated,
 
   // User clicked "Cancel" — return to drop zone
   onCancel: () => {
     BpmView.hide()
     showView('drop')
     setDropState('')
+  },
+
+  // Auto-detection unsure — show metadata confirmation screen
+  onNeedMeta: (data) => {
+    showView('meta')
+    MetaView.show(data)
   }
+})
+
+MetaView.init({
+  // Map created from the confirmation screen
+  onCreated: onMapCreated,
+
+  // Back to BPM view (engine state is untouched — view was only hidden)
+  onBack: () => showView('bpm')
 })
 
 // ═══════════════════════════════════════════════════════════════════════════

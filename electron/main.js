@@ -3,8 +3,10 @@ const path   = require('path')
 const os     = require('os')
 const Store  = require('electron-store')
 
-const phase1 = require('../pipeline/phase1')
-const phase2 = require('../pipeline/phase2')
+const phase1   = require('../pipeline/phase1')
+const phase2   = require('../pipeline/phase2')
+const metadata = require('../pipeline/metadata')
+const cover    = require('../pipeline/cover')
 
 // ── Persistent settings ───────────────────────────────────────────────────────
 // macOS: ~/Library/Application Support/lets-map/config.json
@@ -113,6 +115,47 @@ ipcMain.handle('song:analyze', async (event, filePath) => {
   }
 })
 
+// ── IPC: metadata lookup + confidence (between BPM view and map creation) ───
+
+ipcMain.handle('song:fetch-meta', async (_e, originalName) => {
+  const fallback = { title: originalName, artist: '', album: '' }
+  try {
+    const meta = await metadata.fetch(originalName)
+    const coverPath = meta.found
+      ? await cover.fetchRemote(meta.artist, meta.title)
+      : null
+
+    // Confident requires BOTH a confident metadata match AND a real cover —
+    // otherwise show the confirmation screen so the user can fix things.
+    return {
+      success:   true,
+      meta:      { title: meta.title, artist: meta.artist, album: meta.album },
+      coverPath,
+      confident: !!(meta.confident && coverPath)
+    }
+  } catch (err) {
+    console.error('[main] song:fetch-meta error:', err)
+    return { success: false, meta: fallback, coverPath: null, confident: false }
+  }
+})
+
+// User picks a local image as cover → processed to 512×512 JPEG
+ipcMain.handle('meta:select-cover', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title:      'Select cover image',
+    properties: ['openFile'],
+    filters:    [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'tiff', 'gif'] }]
+  })
+  if (canceled || !filePaths[0]) return null
+
+  try {
+    return await cover.fromFile(filePaths[0])
+  } catch (err) {
+    console.error('[main] meta:select-cover error:', err)
+    return null
+  }
+})
+
 // ── IPC: pipeline — phase 2 (finalize with confirmed BPM) ────────────────────
 
 ipcMain.handle('song:create-map', async (event, {
@@ -121,7 +164,9 @@ ipcMain.handle('song:create-map', async (event, {
   analysis,
   confirmedBpm,
   halfBeatShift,
-  originalName
+  originalName,
+  meta,
+  coverPath
 }) => {
   const senderWin = BrowserWindow.fromWebContents(event.sender)
   const send = (step, msg) => {
@@ -137,6 +182,8 @@ ipcMain.handle('song:create-map', async (event, {
       confirmedBpm,
       halfBeatShift,
       originalName,
+      meta,
+      coverPath,
       exportDir:  store.get('exportDir'),
       mapperName: store.get('mapperName'),
       send

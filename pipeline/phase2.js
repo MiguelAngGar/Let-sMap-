@@ -59,6 +59,8 @@ function calcSilencePad(firstBeatTime, bpm, halfBeatShift = false) {
  * @param {number}  opts.confirmedBpm  BPM chosen by user (may be doubled)
  * @param {boolean} opts.halfBeatShift Whether to shift the grid +½ beat
  * @param {string}  opts.originalName  Song filename without extension (for metadata)
+ * @param {object}  [opts.meta]        User-confirmed { title, artist } — skips auto-fetch
+ * @param {?string} [opts.coverPath]   With opts.meta: cover image path, or null = no cover
  * @param {string}  opts.exportDir     Output root directory
  * @param {string}  opts.mapperName    Written into Info.dat
  * @param {Function} opts.send         Progress callback (step, message)
@@ -71,6 +73,8 @@ async function run({
   confirmedBpm,
   halfBeatShift,
   originalName,
+  meta: metaOverride,
+  coverPath: coverOverride,
   exportDir,
   mapperName,
   send = () => {}
@@ -88,13 +92,20 @@ async function run({
     ? await converter.padToOgg(originalPath, silencePad)
     : await converter.addSilence(oggPath, silencePad)
 
-  // 2. Metadata
-  send('metadata', 'Fetching song metadata…')
-  const meta = await metadata.fetch(originalName)
+  // 2 + 3. Metadata + cover
+  // If the renderer already resolved them (confidence flow), respect its
+  // values — coverPath null explicitly means "no cover". Otherwise fetch.
+  let meta, coverPath
+  if (metaOverride) {
+    meta      = metaOverride
+    coverPath = coverOverride ?? null
+  } else {
+    send('metadata', 'Fetching song metadata…')
+    meta = await metadata.fetch(originalName)
 
-  // 3. Cover
-  send('cover', 'Fetching cover image…')
-  const coverPath = await cover.fetch(meta.artist, meta.title)
+    send('cover', 'Fetching cover image…')
+    coverPath = await cover.fetch(meta.artist, meta.title)
+  }
 
   // 4. Output
   send('output', 'Generating Beat Saber folder…')
@@ -104,7 +115,8 @@ async function run({
     meta,
     analysis: { ...analysis, bpm: confirmedBpm, silence_pad: silencePad },
     exportDir,
-    mapperName
+    mapperName,
+    fallbackName: originalName
   })
 
   return result

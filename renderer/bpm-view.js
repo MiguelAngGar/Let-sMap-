@@ -36,6 +36,7 @@ const BpmView = (() => {
 
   let _onCreateMap  = null    // ({ outputDir }) => void
   let _onCancel     = null    // () => void
+  let _onNeedMeta   = null    // ({ payload, meta, coverPath }) => void
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
   const $ = id => document.getElementById(id)
@@ -334,15 +335,38 @@ const BpmView = (() => {
     const statusEl = $('bpm-status')
 
     if (btn) { btn.disabled = true; btn.textContent = t('bpm.creating') }
-    if (statusEl) statusEl.textContent = t('bpm.building')
+    if (statusEl) statusEl.textContent = t('meta.fetching')
 
-    const result = await window.api.createMap({
+    const payload = {
       oggPath:       _oggPath,
       originalPath:  _originalPath,
       analysis:      _analysis,
       confirmedBpm:  effectiveBpm(),
       halfBeatShift: _halfBeat,
       originalName:  _originalName
+    }
+
+    // Look up metadata + cover first. Confident match → straight through.
+    // Unsure → hand off to the confirmation screen (app.js shows MetaView).
+    const metaRes = await window.api.fetchMeta(_originalName)
+
+    if (!metaRes.confident) {
+      if (btn) { btn.disabled = false; btn.textContent = t('bpm.create') }
+      if (statusEl) statusEl.textContent = ''
+      _onNeedMeta?.({
+        payload,
+        meta:      metaRes.meta      || { title: _originalName, artist: '' },
+        coverPath: metaRes.coverPath || null
+      })
+      return
+    }
+
+    if (statusEl) statusEl.textContent = t('bpm.building')
+
+    const result = await window.api.createMap({
+      ...payload,
+      meta:      metaRes.meta,
+      coverPath: metaRes.coverPath
     })
 
     if (btn) { btn.disabled = false; btn.textContent = t('bpm.create') }
@@ -380,9 +404,10 @@ const BpmView = (() => {
    * Called once at startup.
    * Binds all static DOM events and sets up the pipeline progress listener.
    */
-  function init({ onCreateMap, onCancel }) {
+  function init({ onCreateMap, onCancel, onNeedMeta }) {
     _onCreateMap = onCreateMap
     _onCancel    = onCancel
+    _onNeedMeta  = onNeedMeta
 
     $('play-btn')    ?.addEventListener('click', _togglePlay)
     $('halfbeat-btn')?.addEventListener('click', _toggleHalfBeat)
