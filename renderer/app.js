@@ -32,6 +32,13 @@ const saveBtn      = document.getElementById('save-btn')
 const exportDirEl  = document.getElementById('export-dir')
 const mapperNameEl = document.getElementById('mapper-name')
 const langSelectEl = document.getElementById('lang-select')
+const oggQualityEl = document.getElementById('ogg-quality')
+const matchQualEl  = document.getElementById('match-quality')
+
+// Grey out the fixed-quality dropdown while "keep original quality" is on
+function syncQualityToggle() {
+  if (oggQualityEl && matchQualEl) oggQualityEl.disabled = matchQualEl.checked
+}
 
 // ── File extension guard ──────────────────────────────────────────────────
 const ALLOWED_EXT = new Set(['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aif', '.aiff'])
@@ -191,6 +198,9 @@ async function loadSettings() {
   savedSettings      = await window.api.getSettings()
   exportDirEl.value  = savedSettings.exportDir  || ''
   mapperNameEl.value = savedSettings.mapperName || ''
+  if (oggQualityEl)  oggQualityEl.value = String(savedSettings.oggQuality ?? 10)
+  if (matchQualEl)   matchQualEl.checked = savedSettings.matchSourceQuality ?? true
+  syncQualityToggle()
   // Apply persisted language
   const lang = savedSettings.language || 'system'
   window.i18n.setLang(lang)
@@ -200,6 +210,9 @@ async function loadSettings() {
 function openSettings() {
   exportDirEl.value  = savedSettings.exportDir  || ''
   mapperNameEl.value = savedSettings.mapperName || ''
+  if (oggQualityEl)  oggQualityEl.value = String(savedSettings.oggQuality ?? 10)
+  if (matchQualEl)   matchQualEl.checked = savedSettings.matchSourceQuality ?? true
+  syncQualityToggle()
   if (langSelectEl)  langSelectEl.value = savedSettings.language || 'system'
   modalOverlay.classList.remove('hidden')
   mapperNameEl.focus()
@@ -214,6 +227,8 @@ async function saveSettings() {
   savedSettings = await window.api.saveSettings({
     exportDir:  exportDirEl.value.trim(),
     mapperName: mapperNameEl.value.trim(),
+    oggQuality: oggQualityEl ? parseInt(oggQualityEl.value, 10) : 10,
+    matchSourceQuality: matchQualEl ? matchQualEl.checked : true,
     language:   newLang
   })
   window.i18n.setLang(newLang)
@@ -228,6 +243,7 @@ browseBtn   .addEventListener('click', async () => {
   const chosen = await window.api.selectFolder()
   if (chosen) exportDirEl.value = chosen
 })
+if (matchQualEl) matchQualEl.addEventListener('change', syncQualityToggle)
 
 modalOverlay.addEventListener('click', (e) => {
   if (e.target === modalOverlay) closeSettings()

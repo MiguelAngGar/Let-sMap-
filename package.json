@@ -1,6 +1,6 @@
 {
   "name": "lets-map",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Automatic Beat Saber song prep tool",
   "main": "electron/main.js",
   "scripts": {

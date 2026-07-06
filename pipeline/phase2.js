@@ -77,6 +77,8 @@ async function run({
   coverPath: coverOverride,
   exportDir,
   mapperName,
+  oggQuality = 10,
+  matchSource = true,
   send = () => {}
 }) {
   // 1. Recalculate silence with user-confirmed BPM + modifiers.
@@ -88,9 +90,10 @@ async function run({
   // Prefer single-pass pad+encode from the ORIGINAL file (one lossy generation).
   // Fall back to padding the phase-1 ogg for older callers.
   const fs = require('fs')
+  const encOpts = { quality: oggQuality, matchSource }
   const paddedPath = (originalPath && fs.existsSync(originalPath))
-    ? await converter.padToOgg(originalPath, silencePad)
-    : await converter.addSilence(oggPath, silencePad)
+    ? await converter.padToOgg(originalPath, silencePad, encOpts)
+    : await converter.addSilence(oggPath, silencePad, encOpts)
 
   // 2 + 3. Metadata + cover
   // If the renderer already resolved them (confidence flow), respect its

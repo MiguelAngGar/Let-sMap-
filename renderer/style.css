@@ -807,3 +807,12 @@ input[readonly] { cursor: default; color: var(--text-secondary); }
   font-family: inherit; cursor: pointer;
 }
 .lang-select:focus { border-color: var(--input-focus); box-shadow: 0 0 0 3px var(--accent-glow); }
+.lang-select:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.checkbox-row {
+  flex-direction: row !important;
+  align-items: center; gap: 8px;
+  font-weight: 500 !important; color: var(--text-primary) !important;
+  cursor: pointer;
+}
+.checkbox-row input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-color: var(--input-focus); }

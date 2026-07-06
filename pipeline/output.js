@@ -67,7 +67,7 @@ async function generate({ audioPath, coverPath, meta, analysis, exportDir, mappe
     _customData: {
       _contributors: [],
       _editors: {
-        LetsMap: { version: '0.1.0' }
+        LetsMap: { version: '0.2.0' }
       }
     },
     _difficultyBeatmapSets: []

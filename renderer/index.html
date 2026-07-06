@@ -224,6 +224,27 @@
           <p class="field-hint" data-i18n="settings.mapper_hint">Written into Info.dat as the level author.</p>
         </div>
         <div class="field">
+          <label class="checkbox-row">
+            <input type="checkbox" id="match-quality" checked>
+            <span data-i18n="settings.match_quality">Keep original file quality</span>
+          </label>
+          <p class="field-hint" data-i18n="settings.match_quality_hint">Matches the uploaded file's bitrate so the map audio stays the same size and quality. Turn off to pick a fixed quality below.</p>
+        </div>
+        <div class="field">
+          <label for="ogg-quality" data-i18n="settings.quality">Audio quality (OGG)</label>
+          <select id="ogg-quality" class="lang-select">
+            <option value="10">10 — Max</option>
+            <option value="9">9</option>
+            <option value="8">8</option>
+            <option value="7">7</option>
+            <option value="6">6</option>
+            <option value="5">5</option>
+            <option value="4">4</option>
+            <option value="3">3</option>
+          </select>
+          <p class="field-hint" data-i18n="settings.quality_hint">10 = maximum quality (~500 kbps). Lower it if the file gets too large.</p>
+        </div>
+        <div class="field">
           <label for="lang-select" data-i18n="settings.language">Language</label>
           <select id="lang-select" class="lang-select">
             <option value="system">System (English)</option>

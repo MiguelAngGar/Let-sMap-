@@ -18,7 +18,9 @@ const store = new Store({
     mapperName:  '',
     songVolume:  75,
     metroVolume: 100,
-    language:    'system'
+    language:    'system',
+    oggQuality:  10,       // Vorbis VBR quality 0–10 for the exported song.ogg (10 = max)
+    matchSourceQuality: true // Match the upload's bitrate instead of forcing q10 (keeps size/quality)
   }
 })
 
@@ -90,6 +92,10 @@ ipcMain.handle('settings:save', (_e, data) => {
   if (typeof data.songVolume  === 'number') store.set('songVolume',  data.songVolume)
   if (typeof data.metroVolume === 'number') store.set('metroVolume', data.metroVolume)
   if (typeof data.language    === 'string') store.set('language',    data.language)
+  if (typeof data.oggQuality  === 'number' && Number.isFinite(data.oggQuality)) {
+    store.set('oggQuality', Math.min(10, Math.max(0, Math.round(data.oggQuality))))
+  }
+  if (typeof data.matchSourceQuality === 'boolean') store.set('matchSourceQuality', data.matchSourceQuality)
   return store.store
 })
 
@@ -191,6 +197,8 @@ ipcMain.handle('song:create-map', async (event, {
       coverPath,
       exportDir:  store.get('exportDir'),
       mapperName: store.get('mapperName'),
+      oggQuality: store.get('oggQuality'),
+      matchSource: store.get('matchSourceQuality'),
       send
     })
 
