@@ -1,6 +1,6 @@
 {
   "name": "lets-map",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Automatic Beat Saber song prep tool",
   "main": "electron/main.js",
   "scripts": {
@@ -22,6 +22,8 @@
       "renderer/**/*",
       "node_modules/**/*",
       "!python/.venv/**/*",
+      "!python/dist/**/*",
+      "!python/build/**/*",
       "!python/**/__pycache__/**/*",
       "!**/*.pyc",
       "!**/*.pyo"
@@ -60,7 +62,8 @@
     "asarUnpack": [
       "node_modules/ffmpeg-static/**/*",
       "python/dist/**/*",
-      "python/analyze.py"
+      "python/analyze.py",
+      "pipeline/av-engine/**/*"
     ]
   },
   "devDependencies": {

@@ -140,17 +140,24 @@ class WaveformTimeline {
 
     const cur     = engine.currentTime
     const dur     = engine.duration
+    const leadIn  = engine.leadIn || 0
     const ratio   = Math.min(cur / dur, 1)
     const headX   = ratio * W
     const mid     = H / 2
-    const barW    = W / data.length
     const maxAmp  = H * 0.44    // bars fill 88% of total height (44% each side)
-    const splitI  = Math.floor(ratio * data.length)
+
+    // The waveform occupies only the audio region; the lead-in silence that
+    // will be prepended to the exported song shows as a flat area before it.
+    const leadX   = (leadIn / dur) * W
+    const audioW  = Math.max(1, W - leadX)
+    const barW    = audioW / data.length
+    const audioRatio = Math.max(0, Math.min((cur - leadIn) / Math.max(dur - leadIn, 1e-9), 1))
+    const splitI  = Math.floor(audioRatio * data.length)
 
     // Pass 1 — unplayed (dim)
     ctx.fillStyle = colors.unplayed
     for (let i = splitI; i < data.length; i++) {
-      const x   = i * barW
+      const x   = leadX + i * barW
       const amp = data[i] * maxAmp
       ctx.fillRect(x, mid - amp, Math.max(barW - 0.5, 0.5), Math.max(amp * 2, 1))
     }
@@ -158,9 +165,15 @@ class WaveformTimeline {
     // Pass 2 — played (bright, accent colour)
     ctx.fillStyle = colors.played
     for (let i = 0; i < splitI; i++) {
-      const x   = i * barW
+      const x   = leadX + i * barW
       const amp = data[i] * maxAmp
       ctx.fillRect(x, mid - amp, Math.max(barW - 0.5, 0.5), Math.max(amp * 2, 1))
+    }
+
+    // Audio-start marker: a thin line where the prepended silence ends
+    if (leadX > 0.5) {
+      ctx.fillStyle = colors.unplayed
+      ctx.fillRect(Math.round(leadX), Math.round(mid - maxAmp), Math.max(1, this._dpr), Math.round(maxAmp * 2))
     }
 
     // Playhead glow (subtle halo, drawn before the sharp line)

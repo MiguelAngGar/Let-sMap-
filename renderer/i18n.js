@@ -23,6 +23,7 @@ const T = {
   en: {
     'drop.headline':  "Drag your song here",
     'drop.hint':      "mp3 · wav · flac · ogg · m4a",
+    'drop.click':     "or click to browse",
 
     'bpm.play':                  "Play",
     'bpm.pause':                 "Pause",
@@ -62,7 +63,7 @@ const T = {
 
     'settings.title':        "Settings",
     'settings.export_dir':   "Export folder",
-    'settings.export_hint':  "Beat Saber project folders are saved here.",
+    'settings.export_hint':  "Generated maps are saved to this folder. You can type a path, browse, or auto-detect your Beat Saber install.",
     'settings.mapper':       "Mapper name",
     'settings.mapper_hint':  "Written into Info.dat as the level author.",
     'settings.mapper_ph':    "YourName",
@@ -73,6 +74,9 @@ const T = {
     'settings.language':     "Language",
     'settings.lang_system':  "System ({lang})",
     'settings.browse':       "Browse…",
+    'settings.autodetect':       "Auto-detect",
+    'settings.autodetect_found': "Install detected ✓",
+    'settings.autodetect_none':  "Beat Saber not found",
     'settings.cancel':       "Cancel",
     'settings.save':         "Save",
 
@@ -95,6 +99,23 @@ const T = {
       "Counting every single beat…",
       "Minimizing alignment error…",
       "Detecting musical accents…",
+    ],
+
+    'analysis.msgs_av': [
+      "Converting audio…",
+      "Hunting for onsets…",
+      "Trying 17,000 tempos at once…",
+      "Doing beat math at 44,100 Hz…",
+      "No neural networks were harmed…",
+      "Asking the kick drum directly…",
+      "Measuring gaps with a tiny ruler…",
+      "Folding the song into a grid…",
+      "Lining up every beat…",
+      "Snapping to the grid…",
+      "Finding beat 1…",
+      "Counting every single beat…",
+      "Interrogating suspicious intervals…",
+      "Almost done lying to you…",
     ],
 
     'audio.msgs': [
@@ -124,6 +145,7 @@ const T = {
   es: {
     'drop.headline':  "Arrastra tu canción aquí",
     'drop.hint':      "mp3 · wav · flac · ogg · m4a",
+    'drop.click':     "o haz clic para buscar",
 
     'bpm.play':                  "Reproducir",
     'bpm.pause':                 "Pausar",
@@ -163,7 +185,7 @@ const T = {
 
     'settings.title':        "Ajustes",
     'settings.export_dir':   "Carpeta de exportación",
-    'settings.export_hint':  "Las carpetas del proyecto se guardan aquí.",
+    'settings.export_hint':  "Los mapas generados se guardan en esta carpeta. Puedes escribir una ruta, explorar, o autodetectar tu instalación de Beat Saber.",
     'settings.mapper':       "Nombre del mapper",
     'settings.mapper_hint':  "Se escribe en Info.dat como autor del nivel.",
     'settings.mapper_ph':    "TuNombre",
@@ -174,6 +196,9 @@ const T = {
     'settings.language':     "Idioma",
     'settings.lang_system':  "Sistema ({lang})",
     'settings.browse':       "Explorar…",
+    'settings.autodetect':       "Autodetectar",
+    'settings.autodetect_found': "Instalación detectada ✓",
+    'settings.autodetect_none':  "No se encontró Beat Saber",
     'settings.cancel':       "Cancelar",
     'settings.save':         "Guardar",
 
@@ -196,6 +221,23 @@ const T = {
       "Contando cada beat uno a uno…",
       "Minimizando el error de alineación…",
       "Detectando acentos musicales…",
+    ],
+
+    'analysis.msgs_av': [
+      "Convirtiendo el audio…",
+      "Cazando onsets…",
+      "Probando 17.000 tempos a la vez…",
+      "Haciendo cuentas a 44.100 Hz…",
+      "Ninguna red neuronal ha sido dañada…",
+      "Preguntándole directamente al bombo…",
+      "Midiendo huecos con una regla diminuta…",
+      "Plegando la canción en una cuadrícula…",
+      "Alineando todos los beats…",
+      "Ajustando a la cuadrícula…",
+      "Buscando el beat 1…",
+      "Contando cada beat, uno a uno…",
+      "Interrogando intervalos sospechosos…",
+      "Casi termino de mentirte…",
     ],
 
     'audio.msgs': [
@@ -225,6 +267,7 @@ const T = {
   fr: {
     'drop.headline':  "Glissez votre chanson ici",
     'drop.hint':      "mp3 · wav · flac · ogg · m4a",
+    'drop.click':     "ou cliquez pour parcourir",
 
     'bpm.play':                  "Lecture",
     'bpm.pause':                 "Pause",
@@ -264,7 +307,7 @@ const T = {
 
     'settings.title':        "Paramètres",
     'settings.export_dir':   "Dossier d'export",
-    'settings.export_hint':  "Les projets Beat Saber sont enregistrés ici.",
+    'settings.export_hint':  "Les maps générées sont enregistrées dans ce dossier. Saisissez un chemin, parcourez, ou détectez automatiquement votre installation de Beat Saber.",
     'settings.mapper':       "Nom du mapper",
     'settings.mapper_hint':  "Écrit dans Info.dat comme auteur du niveau.",
     'settings.mapper_ph':    "VotreNom",
@@ -275,6 +318,9 @@ const T = {
     'settings.language':     "Langue",
     'settings.lang_system':  "Système ({lang})",
     'settings.browse':       "Parcourir…",
+    'settings.autodetect':       "Détection auto",
+    'settings.autodetect_found': "Installation détectée ✓",
+    'settings.autodetect_none':  "Beat Saber introuvable",
     'settings.cancel':       "Annuler",
     'settings.save':         "Enregistrer",
 
@@ -297,6 +343,23 @@ const T = {
       "Comptage de chaque temps…",
       "Minimisation de l'erreur d'alignement…",
       "Détection des accents musicaux…",
+    ],
+
+    'analysis.msgs_av': [
+      "Conversion de l'audio…",
+      "Chasse aux onsets…",
+      "Test de 17 000 tempos à la fois…",
+      "Calculs à 44 100 Hz…",
+      "Aucun réseau de neurones n'a été blessé…",
+      "On demande directement au kick…",
+      "Mesure des écarts à la petite règle…",
+      "Pliage de la chanson en grille…",
+      "Alignement de chaque beat…",
+      "Ajustement à la grille…",
+      "Recherche du beat 1…",
+      "Comptage de chaque beat, un par un…",
+      "Interrogatoire des intervalles suspects…",
+      "J'ai presque fini de te mentir…",
     ],
 
     'audio.msgs': [
@@ -326,6 +389,7 @@ const T = {
   de: {
     'drop.headline':  "Song hier ablegen",
     'drop.hint':      "mp3 · wav · flac · ogg · m4a",
+    'drop.click':     "oder klicken zum Durchsuchen",
 
     'bpm.play':                  "Abspielen",
     'bpm.pause':                 "Pause",
@@ -365,7 +429,7 @@ const T = {
 
     'settings.title':        "Einstellungen",
     'settings.export_dir':   "Exportordner",
-    'settings.export_hint':  "Beat Saber-Projektordner werden hier gespeichert.",
+    'settings.export_hint':  "Erstellte Maps werden in diesem Ordner gespeichert. Pfad eintippen, durchsuchen oder die Beat-Saber-Installation automatisch erkennen.",
     'settings.mapper':       "Mapper-Name",
     'settings.mapper_hint':  "Wird in Info.dat als Level-Autor geschrieben.",
     'settings.mapper_ph':    "DeinName",
@@ -376,6 +440,9 @@ const T = {
     'settings.language':     "Sprache",
     'settings.lang_system':  "System ({lang})",
     'settings.browse':       "Durchsuchen…",
+    'settings.autodetect':       "Automatisch erkennen",
+    'settings.autodetect_found': "Installation erkannt ✓",
+    'settings.autodetect_none':  "Beat Saber nicht gefunden",
     'settings.cancel':       "Abbrechen",
     'settings.save':         "Speichern",
 
@@ -398,6 +465,23 @@ const T = {
       "Jeden einzelnen Beat zählen…",
       "Ausrichtungsfehler minimieren…",
       "Musikalische Akzente erkennen…",
+    ],
+
+    'analysis.msgs_av': [
+      "Audio wird konvertiert…",
+      "Onsets werden gejagt…",
+      "17.000 Tempi gleichzeitig testen…",
+      "Beat-Mathe bei 44.100 Hz…",
+      "Keine neuronalen Netze wurden verletzt…",
+      "Die Kick-Drum wird direkt befragt…",
+      "Lücken mit winzigem Lineal vermessen…",
+      "Der Song wird ins Raster gefaltet…",
+      "Jeder Beat wird ausgerichtet…",
+      "Am Raster einrasten…",
+      "Beat 1 wird gesucht…",
+      "Jeder einzelne Beat wird gezählt…",
+      "Verdächtige Intervalle im Verhör…",
+      "Fast fertig mit dem Flunkern…",
     ],
 
     'audio.msgs': [
@@ -427,6 +511,7 @@ const T = {
   pt: {
     'drop.headline':  "Arraste sua música aqui",
     'drop.hint':      "mp3 · wav · flac · ogg · m4a",
+    'drop.click':     "ou clique para procurar",
 
     'bpm.play':                  "Reproduzir",
     'bpm.pause':                 "Pausar",
@@ -466,7 +551,7 @@ const T = {
 
     'settings.title':        "Configurações",
     'settings.export_dir':   "Pasta de exportação",
-    'settings.export_hint':  "As pastas do projeto Beat Saber são salvas aqui.",
+    'settings.export_hint':  "Os mapas gerados são salvos nesta pasta. Você pode digitar um caminho, procurar, ou autodetectar a sua instalação do Beat Saber.",
     'settings.mapper':       "Nome do mapper",
     'settings.mapper_hint':  "Escrito no Info.dat como autor do nível.",
     'settings.mapper_ph':    "SeuNome",
@@ -477,6 +562,9 @@ const T = {
     'settings.language':     "Idioma",
     'settings.lang_system':  "Sistema ({lang})",
     'settings.browse':       "Procurar…",
+    'settings.autodetect':       "Autodetectar",
+    'settings.autodetect_found': "Instalação detectada ✓",
+    'settings.autodetect_none':  "Beat Saber não encontrado",
     'settings.cancel':       "Cancelar",
     'settings.save':         "Salvar",
 
@@ -499,6 +587,23 @@ const T = {
       "Contando cada beat…",
       "Minimizando erro de alinhamento…",
       "Detectando acentos musicais…",
+    ],
+
+    'analysis.msgs_av': [
+      "Convertendo o áudio…",
+      "Caçando onsets…",
+      "Testando 17.000 tempos de uma vez…",
+      "Fazendo contas a 44.100 Hz…",
+      "Nenhuma rede neural foi ferida…",
+      "Perguntando diretamente ao bumbo…",
+      "Medindo intervalos com uma régua minúscula…",
+      "Dobrando a música numa grade…",
+      "Alinhando cada beat…",
+      "Encaixando na grade…",
+      "Procurando o beat 1…",
+      "Contando cada beat, um a um…",
+      "Interrogando intervalos suspeitos…",
+      "Quase terminando de mentir pra você…",
     ],
 
     'audio.msgs': [

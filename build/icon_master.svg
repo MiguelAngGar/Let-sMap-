@@ -1,50 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Let'sMap! app icon — waveform with THE BEAT left of centre and a blurred,
+     fading mirror reflection under the baseline. -->
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#17131F"/>
-      <stop offset="1" stop-color="#0B0910"/>
+      <stop offset="0" stop-color="#1d1d26"/>
+      <stop offset="1" stop-color="#0c0c10"/>
     </linearGradient>
-    <linearGradient id="pin" x1="0.15" y1="0.05" x2="0.9" y2="0.95">
-      <stop offset="0" stop-color="#9B6BFF"/>
-      <stop offset="1" stop-color="#7A45E6"/>
+    <radialGradient id="glow" cx="0.28" cy="0.5" r="0.68">
+      <stop offset="0"   stop-color="#7c6af7" stop-opacity="0.34"/>
+      <stop offset="0.6" stop-color="#7c6af7" stop-opacity="0.10"/>
+      <stop offset="1"   stop-color="#7c6af7" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9c8cff"/>
+      <stop offset="1" stop-color="#6250d8"/>
     </linearGradient>
-    <linearGradient id="pinShade" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#6E3ED6"/>
-      <stop offset="1" stop-color="#5A2FBF"/>
+    <linearGradient id="beat" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e6e0ff"/>
+      <stop offset="1" stop-color="#9d8bff"/>
     </linearGradient>
+    <filter id="beatGlow" x="-80%" y="-40%" width="260%" height="180%">
+      <feGaussianBlur stdDeviation="24" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- Reflection: gaussian blur + vertical fade-out -->
+    <filter id="reflBlur" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="19"/>
+    </filter>
+    <linearGradient id="fadeG" gradientUnits="userSpaceOnUse" x1="0" y1="671" x2="0" y2="972">
+      <stop offset="0"    stop-color="#ffffff" stop-opacity="0.32"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="1"    stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="reflFade">
+      <rect x="0" y="671" width="1024" height="301" fill="url(#fadeG)"/>
+    </mask>
+    <clipPath id="tile">
+      <rect x="0" y="0" width="1024" height="1024" rx="230"/>
+    </clipPath>
   </defs>
 
-  <!-- rounded square background -->
-  <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="230" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="230" fill="url(#glow)"/>
+  <rect x="7" y="7" width="1010" height="1010" rx="224" fill="none"
+        stroke="#ffffff" stroke-opacity="0.05" stroke-width="6"/>
 
-  <!-- pin side/depth shade -->
-  <path d="M540 150
-           C700 150 828 278 828 438
-           C828 560 745 645 560 850
-           L556 854
-           C371 645 288 560 288 438
-           C288 278 380 150 540 150 Z"
-        fill="url(#pinShade)" opacity="0.55"/>
+  <!-- Waveform -->
+  <g>
+    <rect x="55" y="567" width="54" height="96" rx="27" fill="url(#bar)" opacity="0.8"/>
+    <rect x="141" y="463" width="54" height="200" rx="27" fill="url(#bar)"/>
+    <g filter="url(#beatGlow)">
+      <rect x="218" y="128" width="72" height="535" rx="36" fill="url(#beat)"/>
+    </g>
+    <rect x="313" y="293" width="54" height="370" rx="27" fill="url(#bar)"/>
+    <rect x="399" y="378" width="54" height="285" rx="27" fill="url(#bar)"/>
+    <rect x="485" y="333" width="54" height="330" rx="27" fill="url(#bar)"/>
+    <rect x="571" y="253" width="54" height="410" rx="27" fill="url(#bar)"/>
+    <rect x="657" y="353" width="54" height="310" rx="27" fill="url(#bar)"/>
+    <rect x="743" y="445" width="54" height="218" rx="27" fill="url(#bar)"/>
+    <rect x="829" y="518" width="54" height="145" rx="27" fill="url(#bar)" opacity="0.9"/>
+    <rect x="915" y="583" width="54" height="80" rx="27" fill="url(#bar)" opacity="0.75"/>
+  </g>
 
-  <!-- main pin -->
-  <path d="M512 150
-           C672 150 800 278 800 438
-           C800 560 717 645 512 852
-           C307 645 224 560 224 438
-           C224 278 352 150 512 150 Z"
-        fill="url(#pin)"/>
-
-  <!-- pin hole -->
-  <circle cx="512" cy="430" r="118" fill="#120E1A"/>
-
-  <!-- waveform bars -->
-  <g fill="#B79BF7">
-    <rect x="250" y="892" width="46" height="66"  rx="23"/>
-    <rect x="330" y="874" width="46" height="102" rx="23"/>
-    <rect x="410" y="850" width="46" height="150" rx="23" fill="#9B6BFF"/>
-    <rect x="490" y="864" width="46" height="122" rx="23" fill="#9B6BFF"/>
-    <rect x="570" y="882" width="46" height="86"  rx="23"/>
-    <rect x="650" y="898" width="46" height="54"  rx="23"/>
-    <rect x="730" y="884" width="46" height="82"  rx="23"/>
+  <!-- Mirror reflection: blurred + fading away -->
+  <g clip-path="url(#tile)">
+    <g mask="url(#reflFade)">
+      <g filter="url(#reflBlur)">
+      <rect x="55" y="671" width="54" height="91" rx="27" fill="url(#bar)" opacity="0.8"/>
+      <rect x="141" y="671" width="54" height="190" rx="27" fill="url(#bar)"/>
+      <rect x="218" y="671" width="72" height="508" rx="36" fill="url(#beat)"/>
+      <rect x="313" y="671" width="54" height="352" rx="27" fill="url(#bar)"/>
+      <rect x="399" y="671" width="54" height="271" rx="27" fill="url(#bar)"/>
+      <rect x="485" y="671" width="54" height="314" rx="27" fill="url(#bar)"/>
+      <rect x="571" y="671" width="54" height="390" rx="27" fill="url(#bar)"/>
+      <rect x="657" y="671" width="54" height="294" rx="27" fill="url(#bar)"/>
+      <rect x="743" y="671" width="54" height="207" rx="27" fill="url(#bar)"/>
+      <rect x="829" y="671" width="54" height="138" rx="27" fill="url(#bar)" opacity="0.9"/>
+      <rect x="915" y="671" width="54" height="76" rx="27" fill="url(#bar)" opacity="0.75"/>
+      </g>
+    </g>
   </g>
 </svg>

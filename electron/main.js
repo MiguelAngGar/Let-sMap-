@@ -3,6 +3,8 @@ const path   = require('path')
 const os     = require('os')
 const Store  = require('electron-store')
 
+const bsDetect = require('./beatsaber-detect')
+
 const phase1   = require('../pipeline/phase1')
 const phase2   = require('../pipeline/phase2')
 const metadata = require('../pipeline/metadata')
@@ -18,6 +20,7 @@ const store = new Store({
     mapperName:  '',
     songVolume:  75,
     metroVolume: 100,
+    exportDirUserSet: false,  // true once the user picks a folder manually
     language:    'system',
     oggQuality:  10,       // Vorbis VBR quality 0–10 for the exported song.ogg (10 = max)
     matchSourceQuality: true // Match the upload's bitrate instead of forcing q10 (keeps size/quality)
@@ -29,10 +32,10 @@ let win
 
 function createWindow() {
   win = new BrowserWindow({
-    width:  820,
-    height: 580,
-    minWidth:  640,
-    minHeight: 480,
+    width:  860,
+    height: 680,
+    minWidth:  720,
+    minHeight: 560,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     autoHideMenuBar: true,
     backgroundColor: '#0d0d0f',
@@ -55,7 +58,28 @@ app.whenReady().then(() => {
   if (process.platform !== 'darwin') Menu.setApplicationMenu(null)
   createWindow()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
+
+  // Auto-point the export folder at the Beat Saber install (CustomWIPLevels)
+  // as long as the user has never chosen a folder manually. Runs on every
+  // launch so a moved/reinstalled game is picked up — but NEVER overrides a
+  // folder the user picked themselves.
+  autoDetectExportDir()
 })
+
+async function autoDetectExportDir() {
+  try {
+    if (store.get('exportDirUserSet')) return
+    const install = await bsDetect.detectBeatSaber()
+    if (!install) return
+    const wip = bsDetect.wipLevelsFolder(install)
+    if (wip && wip !== store.get('exportDir')) {
+      store.set('exportDir', wip)
+      console.log('[main] export folder auto-detected:', wip)
+    }
+  } catch (err) {
+    console.error('[main] Beat Saber auto-detect failed:', err)
+  }
+}
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -82,12 +106,27 @@ function buildCandidates(bpm, tempoCandidates = []) {
   return { main, alternatives }
 }
 
+// ── IPC: misc ─────────────────────────────────────────────────────────────────
+
+// Analysis engine selected in pipeline/analyzer.js ('arrowvortex' | 'madmom')
+ipcMain.handle('app:get-engine', () => {
+  try { return require('../pipeline/analyzer').ENGINE || 'arrowvortex' }
+  catch { return 'arrowvortex' }
+})
+
 // ── IPC: settings ─────────────────────────────────────────────────────────────
 
 ipcMain.handle('settings:get', () => store.store)
 
 ipcMain.handle('settings:save', (_e, data) => {
-  if (typeof data.exportDir   === 'string') store.set('exportDir',   data.exportDir)
+  if (typeof data.exportDir === 'string' && data.exportDir) {
+    // A changed folder marks the setting as user-chosen — unless the value
+    // came from the Auto-detect button, which must keep tracking enabled.
+    if (data.exportDir !== store.get('exportDir')) {
+      store.set('exportDirUserSet', data.exportDirAuto !== true)
+    }
+    store.set('exportDir', data.exportDir)
+  }
   if (typeof data.mapperName  === 'string') store.set('mapperName',  data.mapperName)
   if (typeof data.songVolume  === 'number') store.set('songVolume',  data.songVolume)
   if (typeof data.metroVolume === 'number') store.set('metroVolume', data.metroVolume)
@@ -99,11 +138,29 @@ ipcMain.handle('settings:save', (_e, data) => {
   return store.store
 })
 
+// Detect the Beat Saber install and return its CustomWIPLevels folder (or null)
+ipcMain.handle('settings:detect-beatsaber', async () => {
+  const install = await bsDetect.detectBeatSaber()
+  return install ? bsDetect.wipLevelsFolder(install) : null
+})
+
 ipcMain.handle('settings:select-folder', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     title:       'Select export folder',
     properties:  ['openDirectory', 'createDirectory'],
     defaultPath: store.get('exportDir')
+  })
+  return canceled ? null : filePaths[0]
+})
+
+// Native file picker for the drop zone (click-to-browse)
+ipcMain.handle('song:select-file', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title:      'Select song',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Audio', extensions: ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aif', 'aiff'] }
+    ]
   })
   return canceled ? null : filePaths[0]
 })

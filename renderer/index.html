@@ -33,6 +33,7 @@
         </svg>
       </div>
       <p class="drop-headline" data-i18n="drop.headline">Drag your song here</p>
+      <p class="drop-click" data-i18n="drop.click">or click to browse</p>
       <p class="drop-hint" data-i18n="drop.hint">mp3 &nbsp;·&nbsp; wav &nbsp;·&nbsp; flac &nbsp;·&nbsp; ogg &nbsp;·&nbsp; m4a</p>
     </div>
     <p id="status-bar" aria-live="polite"></p>
@@ -210,11 +211,17 @@
         <div class="field">
           <label for="export-dir" data-i18n="settings.export_dir">Export folder</label>
           <div class="folder-row">
-            <input type="text" id="export-dir" readonly placeholder="~/Documents/BeatSaberMaps">
-            <button id="browse-btn" class="secondary-btn"
+            <input type="text" id="export-dir" placeholder="~/Documents/BeatSaberMaps"
+                   autocomplete="off" spellcheck="false">
+          </div>
+          <div class="folder-btns">
+            <span id="detect-hint" class="detect-status hidden" aria-live="polite"></span>
+            <button id="detect-btn" class="secondary-btn compact-btn"
+                    data-i18n="settings.autodetect">Auto-detect</button>
+            <button id="browse-btn" class="secondary-btn compact-btn"
                     data-i18n="settings.browse">Browse…</button>
           </div>
-          <p class="field-hint" data-i18n="settings.export_hint">Beat Saber project folders are saved here.</p>
+          <p class="field-hint" data-i18n="settings.export_hint">Generated maps are saved to this folder. You can type a path, browse, or auto-detect your Beat Saber install.</p>
         </div>
         <div class="field">
           <label for="mapper-name" data-i18n="settings.mapper">Mapper name</label>

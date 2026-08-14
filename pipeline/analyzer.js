@@ -2,6 +2,14 @@ const { spawn } = require('child_process')
 const path = require('path')
 const fs   = require('fs')
 
+// ── Engine selection ──────────────────────────────────────────────────────────
+// 'arrowvortex' → pure-JS engine (pipeline/av-engine): ArrowVortex algorithm,
+//                 no Python needed, ~2-4 s per song.
+// 'madmom'      → legacy Python sidecar (python/analyze.py / analyze.exe).
+// Switch here in code, or without touching code via env var:
+//   LETSMAP_ENGINE=madmom npm start
+const ENGINE = process.env.LETSMAP_ENGINE || 'arrowvortex'
+
 // Resolve bundled ffmpeg — same fix as converter.js
 const ffmpegStatic = require('ffmpeg-static')
 const FFMPEG_PATH  = ffmpegStatic.replace('app.asar', 'app.asar.unpacked')
@@ -41,11 +49,11 @@ function getAnalyzeCommand() {
 }
 
 /**
- * Run audio analysis and return parsed result.
+ * Legacy engine: run the Python/madmom analysis in a child process.
  * @param {string} audioPath
  * @returns {Promise<{bpm, first_beat_time, silence_pad, final_offset, beat_duration, ...}>}
  */
-function analyze(audioPath) {
+function analyzeMadmom(audioPath) {
   return new Promise((resolve, reject) => {
     const { bin, args } = getAnalyzeCommand()
     const proc = spawn(bin, [...args, audioPath], {
@@ -93,4 +101,17 @@ function analyze(audioPath) {
   })
 }
 
-module.exports = { analyze }
+/**
+ * Run audio analysis with the selected engine and return the parsed result.
+ * Both engines return the same JSON contract.
+ * @param {string} audioPath
+ * @returns {Promise<{bpm, first_beat_time, silence_pad, final_offset, beat_duration, ...}>}
+ */
+function analyze(audioPath) {
+  if (ENGINE === 'arrowvortex') {
+    return require('./av-engine').analyze(audioPath)
+  }
+  return analyzeMadmom(audioPath)
+}
+
+module.exports = { analyze, ENGINE }

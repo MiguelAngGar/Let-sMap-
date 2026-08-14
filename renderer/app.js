@@ -34,6 +34,23 @@ const mapperNameEl = document.getElementById('mapper-name')
 const langSelectEl = document.getElementById('lang-select')
 const oggQualityEl = document.getElementById('ogg-quality')
 const matchQualEl  = document.getElementById('match-quality')
+const detectBtn    = document.getElementById('detect-btn')
+const detectHintEl = document.getElementById('detect-hint')
+
+// Beat Saber auto-detection is Windows-only (Steam/Oculus registry)
+if (window.api.platform !== 'win32' && detectBtn) detectBtn.classList.add('hidden')
+
+// True while the export-dir field holds a value coming from auto-detection —
+// saving it then must NOT mark the folder as user-chosen, so future app
+// launches keep tracking the Beat Saber install until the user picks a
+// folder manually.
+let exportDirFromAuto = false
+
+function hideDetectHint() {
+  if (!detectHintEl) return
+  detectHintEl.classList.add('hidden')
+  detectHintEl.classList.remove('ok', 'err')
+}
 
 // Grey out the fixed-quality dropdown while "keep original quality" is on
 function syncQualityToggle() {
@@ -45,17 +62,24 @@ const ALLOWED_EXT = new Set(['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aif', '.
 
 // ── Analysis loading messages ─────────────────────────────────────────────
 
+// Loading messages are themed per analysis engine: the legacy Python engine
+// jokes about madmom/neural networks; the JS engine gets its own set.
+let _analysisMsgsKey = 'analysis.msgs_av'
+window.api.getEngine?.().then(engine => {
+  _analysisMsgsKey = engine === 'madmom' ? 'analysis.msgs' : 'analysis.msgs_av'
+}).catch(() => {})
+
 let _analysisTimer = null
 
 function startAnalysisMessages(filename) {
   // Clear any previously running timer before starting a new sequence
   clearTimeout(_analysisTimer)
 
-  let pool = [...tArr('analysis.msgs')].sort(() => Math.random() - 0.5)
+  let pool = [...tArr(_analysisMsgsKey)].sort(() => Math.random() - 0.5)
   let idx  = 0
 
   function showNext() {
-    if (idx >= pool.length) { pool = [...tArr('analysis.msgs')].sort(() => Math.random() - 0.5); idx = 0 }
+    if (idx >= pool.length) { pool = [...tArr(_analysisMsgsKey)].sort(() => Math.random() - 0.5); idx = 0 }
     setDropState('processing', pool[idx++])
     _analysisTimer = setTimeout(showNext, 1800 + Math.random() * 2000)
   }
@@ -111,23 +135,12 @@ dropZone.addEventListener('dragover', (e) => {
   e.dataTransfer.dropEffect = 'copy'
 })
 
-dropZone.addEventListener('drop', async (e) => {
-  e.preventDefault()
-
-  const file = e.dataTransfer.files[0]
-  if (!file) return
-
-  const ext = extOf(file.name)
-  if (!ALLOWED_EXT.has(ext)) {
-    setDropState('error', `Unsupported format: ${ext || '(unknown)'}`)
-    setTimeout(() => setDropState(''), 3500)
-    return
-  }
-
-  startAnalysisMessages(file.name)
+// Shared analysis flow for both entry points (drop + file picker)
+async function processSongFile(filePath, fileName) {
+  startAnalysisMessages(fileName)
 
   // Phase 1: convert + detect BPM (fast — doesn't fetch anything yet)
-  const res = await window.api.analyzeSong(file.path)
+  const res = await window.api.analyzeSong(filePath)
   stopAnalysisMessages()
 
   if (!res.success) {
@@ -146,6 +159,31 @@ dropZone.addEventListener('drop', async (e) => {
     candidates:   res.candidates,
     originalName: res.originalName
   })
+}
+
+dropZone.addEventListener('drop', async (e) => {
+  e.preventDefault()
+
+  const file = e.dataTransfer.files[0]
+  if (!file) return
+
+  const ext = extOf(file.name)
+  if (!ALLOWED_EXT.has(ext)) {
+    setDropState('error', `Unsupported format: ${ext || '(unknown)'}`)
+    setTimeout(() => setDropState(''), 3500)
+    return
+  }
+
+  await processSongFile(file.path, file.name)
+})
+
+// Click on the drop zone → native file picker (same flow as dropping)
+dropZone.addEventListener('click', async () => {
+  if (dropZone.classList.contains('processing')) return
+  const filePath = await window.api.selectSongFile()
+  if (!filePath) return
+  const fileName = filePath.split(/[\\/]/).pop()
+  await processSongFile(filePath, fileName)
 })
 
 // Pipeline progress (phase 2 steps reach bpm-view via its own listener)
@@ -197,6 +235,7 @@ let savedSettings = {}
 async function loadSettings() {
   savedSettings      = await window.api.getSettings()
   exportDirEl.value  = savedSettings.exportDir  || ''
+  exportDirEl.title  = exportDirEl.value
   mapperNameEl.value = savedSettings.mapperName || ''
   if (oggQualityEl)  oggQualityEl.value = String(savedSettings.oggQuality ?? 10)
   if (matchQualEl)   matchQualEl.checked = savedSettings.matchSourceQuality ?? true
@@ -207,8 +246,14 @@ async function loadSettings() {
   if (langSelectEl) langSelectEl.value = lang
 }
 
-function openSettings() {
+async function openSettings() {
+  exportDirFromAuto = false
+  hideDetectHint()
+  // Re-fetch: the main process may have auto-detected a new export folder
+  // after the initial loadSettings() (it runs async on boot).
+  savedSettings = await window.api.getSettings()
   exportDirEl.value  = savedSettings.exportDir  || ''
+  exportDirEl.title  = exportDirEl.value
   mapperNameEl.value = savedSettings.mapperName || ''
   if (oggQualityEl)  oggQualityEl.value = String(savedSettings.oggQuality ?? 10)
   if (matchQualEl)   matchQualEl.checked = savedSettings.matchSourceQuality ?? true
@@ -226,6 +271,7 @@ async function saveSettings() {
   const newLang = langSelectEl ? langSelectEl.value : 'system'
   savedSettings = await window.api.saveSettings({
     exportDir:  exportDirEl.value.trim(),
+    exportDirAuto: exportDirFromAuto,
     mapperName: mapperNameEl.value.trim(),
     oggQuality: oggQualityEl ? parseInt(oggQualityEl.value, 10) : 10,
     matchSourceQuality: matchQualEl ? matchQualEl.checked : true,
@@ -241,12 +287,50 @@ cancelBtn   .addEventListener('click', closeSettings)
 saveBtn     .addEventListener('click', saveSettings)
 browseBtn   .addEventListener('click', async () => {
   const chosen = await window.api.selectFolder()
-  if (chosen) exportDirEl.value = chosen
+  if (chosen) {
+    exportDirEl.value = chosen
+    exportDirEl.title = chosen
+    exportDirFromAuto = false
+    hideDetectHint()
+  }
+})
+
+// The path can also be typed manually — typing makes it a user choice
+exportDirEl.addEventListener('input', () => {
+  exportDirFromAuto = false
+  exportDirEl.title = exportDirEl.value
+  hideDetectHint()
+})
+
+detectBtn?.addEventListener('click', async () => {
+  detectBtn.disabled = true
+  const found = await window.api.detectBeatSaber()
+  detectBtn.disabled = false
+  if (!detectHintEl) return
+  detectHintEl.classList.remove('hidden', 'ok', 'err')
+  if (found) {
+    exportDirEl.value = found
+    exportDirEl.title = found
+    exportDirFromAuto = true
+    detectHintEl.textContent = t('settings.autodetect_found')
+    detectHintEl.classList.add('ok')
+  } else {
+    detectHintEl.textContent = t('settings.autodetect_none')
+    detectHintEl.classList.add('err')
+  }
 })
 if (matchQualEl) matchQualEl.addEventListener('change', syncQualityToggle)
 
+// Close on overlay click — but only if the press STARTED on the overlay.
+// Otherwise selecting text inside the panel and releasing the mouse outside
+// it (mousedown inside → mouseup on the overlay) would close the settings.
+let _overlayPressed = false
+modalOverlay.addEventListener('mousedown', (e) => {
+  _overlayPressed = (e.target === modalOverlay)
+})
 modalOverlay.addEventListener('click', (e) => {
-  if (e.target === modalOverlay) closeSettings()
+  if (e.target === modalOverlay && _overlayPressed) closeSettings()
+  _overlayPressed = false
 })
 
 document.addEventListener('keydown', (e) => {

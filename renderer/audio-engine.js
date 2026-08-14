@@ -47,10 +47,12 @@ class AudioEngine {
     this._nextBeatTime = 0        // next scheduled beat (ctx time)
     this._schedulerTimer = null
 
-    // Configurable BPM params — set by bpm-view
+    // Configurable grid params — set by bpm-view via setGrid()
     this.bpm           = 120
-    this.firstBeatTime = 0        // onset time of first beat in original audio (s)
-    this.halfBeatShift = false
+    this.firstBeatTime = 0        // PREVIEW-time of beat 1 (downbeat), grid-aligned
+    this.leadIn        = 0        // virtual silence before the audio (s) — the
+                                  // same silence that will be prepended to the
+                                  // exported song, so the preview mirrors the map
 
     // Volume levels (adjustable before or after init via setters below)
     this.songVolume    = 0.75     // 75% — prominent but leaves room for metronome
@@ -58,7 +60,7 @@ class AudioEngine {
 
     // Preprocessed waveform — built once in loadFile
     this.waveformData  = null     // Float32Array of normalised peak amplitudes
-    this.duration      = 0        // total duration in seconds
+    this._audioDuration = 0       // decoded buffer duration (s) — see duration getter
 
     // Callbacks
     this.onBeat = null            // () => void — fires ~on each beat (visual)
@@ -81,12 +83,15 @@ class AudioEngine {
     const raw    = await response.arrayBuffer()
     this._buffer = await this._ctx.decodeAudioData(raw)
 
-    this.duration     = this._buffer.duration
-    this.waveformData = this._buildWaveform(this._buffer)
-    this._pauseOffset = 0
+    this._audioDuration = this._buffer.duration
+    this.waveformData   = this._buildWaveform(this._buffer)
+    this._pauseOffset   = 0
   }
 
   get isPlaying() { return this._isPlaying }
+
+  /** Total preview duration: virtual lead-in silence + audio. */
+  get duration() { return this.leadIn + this._audioDuration }
 
   /**
    * Current playback position in seconds.
@@ -96,7 +101,7 @@ class AudioEngine {
     if (!this._ctx || !this._buffer) return this._pauseOffset
     if (this._isPlaying) {
       const t = this._ctx.currentTime - this._startTime
-      return Math.max(0, Math.min(t, this._buffer.duration))
+      return Math.max(0, Math.min(t, this.duration))
     }
     return this._pauseOffset
   }
@@ -111,9 +116,16 @@ class AudioEngine {
     this._source.buffer = this._buffer
     this._source.connect(this._songGain)
 
+    // _pauseOffset is in PREVIEW time (lead-in silence + audio). Positions
+    // inside the lead-in delay the buffer start; positions past it seek into
+    // the buffer. Either way _startTime maps ctx-time ↔ preview-time.
     const offset    = this._pauseOffset
     this._startTime = this._ctx.currentTime - offset
-    this._source.start(0, offset)
+    if (offset < this.leadIn) {
+      this._source.start(this._ctx.currentTime + (this.leadIn - offset), 0)
+    } else {
+      this._source.start(0, offset - this.leadIn)
+    }
 
     this._source.onended = () => {
       // Only treat this as a natural end if we didn't manually stop
@@ -136,7 +148,7 @@ class AudioEngine {
     // Snapshot current audio position before stopping
     this._pauseOffset = Math.max(
       0,
-      Math.min(this._ctx.currentTime - this._startTime, this._buffer.duration)
+      Math.min(this._ctx.currentTime - this._startTime, this.duration)
     )
     this._source.onended = null   // prevent spurious onEnd callback
     this._source.stop()
@@ -165,18 +177,41 @@ class AudioEngine {
       this._isPlaying = false
     }
 
-    this._pauseOffset = Math.max(0, Math.min(seconds, this._buffer?.duration ?? 0))
+    this._pauseOffset = Math.max(0, Math.min(seconds, this.duration))
 
     if (wasPlaying) this.play()   // play() recalculates _startTime and _startScheduler()
   }
 
-  /** Update BPM. Re-initialises the scheduler if currently playing. */
-  setBPM(bpm) {
-    this.bpm = bpm
-    if (this._isPlaying) {
-      this._stopScheduler()
-      this._startScheduler()
-    }
+  /**
+   * Update the whole preview grid in one call.
+   * @param {object} g
+   * @param {number} g.bpm     Effective BPM (doubling already applied)
+   * @param {number} g.leadIn  Silence that will be prepended to the export (s)
+   * @param {number} g.anchor  PREVIEW-time of beat 1 (downbeat) — grid-aligned,
+   *                           half-beat shift already applied by the caller
+   *
+   * The current position is preserved in AUDIO terms: if the lead-in length
+   * changes, the playhead keeps pointing at the same music.
+   */
+  setGrid({ bpm, leadIn, anchor }) {
+    const wasPlaying = this._isPlaying
+    const oldLeadIn  = this.leadIn
+    const pos        = this.currentTime
+
+    if (wasPlaying) this.pause()
+
+    this.bpm           = bpm
+    this.leadIn        = leadIn
+    this.firstBeatTime = anchor
+
+    // Re-map the playhead into the new preview timeline
+    if (pos > oldLeadIn) {
+      this._pauseOffset = (pos - oldLeadIn) + leadIn        // inside the audio
+    } else if (oldLeadIn > 0) {
+      this._pauseOffset = (pos / oldLeadIn) * leadIn        // inside the silence
+    } // else: pos 0 with no previous lead-in → stay at 0
+
+    if (wasPlaying) this.play()
   }
 
   /**
@@ -195,15 +230,6 @@ class AudioEngine {
   setMetroVolume(v) {
     this.metroVolume = v
     if (this._metroGain) this._metroGain.gain.value = v
-  }
-
-  /** Toggle half-beat grid shift. Re-syncs scheduler immediately. */
-  setHalfBeatShift(enabled) {
-    this.halfBeatShift = enabled
-    if (this._isPlaying) {
-      this._stopScheduler()
-      this._startScheduler()
-    }
   }
 
   /** Stop playback, rewind to zero. */
@@ -284,12 +310,18 @@ class AudioEngine {
    */
   _startScheduler() {
     const beatDur      = 60 / this.bpm
-    const halfShift    = this.halfBeatShift ? beatDur / 2 : 0
-    const firstBeatCtx = this._startTime + this.firstBeatTime + halfShift
+    const anchor       = this.firstBeatTime          // preview-time of beat 1
+    const firstBeatCtx = this._startTime + anchor
+
+    // The beat grid extends BACKWARDS from the anchor (the downbeat can sit
+    // several beats into the music), but clicks only make sense where there
+    // is audio: the first click is the first grid beat at/after the end of
+    // the lead-in silence. minN = first grid index at preview-time ≥ leadIn.
+    const minN = Math.ceil((this.leadIn - anchor) / beatDur - 1e-9)
 
     // Find the next beat index that hasn't fired yet
     const elapsed = this._ctx.currentTime - firstBeatCtx
-    const nextN   = Math.max(0, Math.ceil(elapsed / beatDur))
+    const nextN   = Math.max(minN, Math.ceil(elapsed / beatDur))
     this._nextBeatTime = firstBeatCtx + nextN * beatDur
 
     // Advance past any floating-point edge where we're still exactly on currentTime

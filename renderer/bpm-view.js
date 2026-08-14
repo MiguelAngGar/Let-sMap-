@@ -146,6 +146,23 @@ const BpmView = (() => {
     return { pad, total, n, beatDur, halfBeat }
   }
 
+  // ── Engine grid sync ───────────────────────────────────────────────────────
+  //
+  // The preview mirrors the exported map: leadIn = the silence that will be
+  // prepended, anchor = where the downbeat lands after padding (n·beatDur,
+  // half-beat shift included — _computePad handles it). The engine schedules
+  // clicks only from the first grid beat that has audio.
+  function _syncEngineGrid() {
+    if (!_engine) return
+    const bpm  = effectiveBpm()
+    const data = _computePad(bpm, _halfBeat)
+    if (data) {
+      _engine.setGrid({ bpm, leadIn: data.pad, anchor: data.total })
+    } else {
+      _engine.setGrid({ bpm, leadIn: 0, anchor: 0 })
+    }
+  }
+
   // ── Render helpers ─────────────────────────────────────────────────────────
 
   function _renderBpmDisplay() {
@@ -278,7 +295,7 @@ const BpmView = (() => {
   function _selectBpm(bpm) {
     _baseBpm = Math.round(bpm * 100) / 100
     _doubled = false
-    _engine.setBPM(effectiveBpm())
+    _syncEngineGrid()
     _render()
     _renderCustomInput()
   }
@@ -311,15 +328,17 @@ const BpmView = (() => {
 
   function _toggleHalfBeat() {
     _halfBeat = !_halfBeat
-    _engine.setHalfBeatShift(_halfBeat)
+    _syncEngineGrid()
     _renderToggles()
+    _renderOffsetInfo()
   }
 
   function _toggleDouble() {
     _doubled = !_doubled
-    _engine.setBPM(effectiveBpm())
+    _syncEngineGrid()
     _renderBpmDisplay()
     _renderToggles()
+    _renderOffsetInfo()
   }
 
   function _togglePlay() {
@@ -509,10 +528,8 @@ const BpmView = (() => {
     _baseBpm = Math.round(analysis.bpm * 100) / 100
 
     _initEngine()
-    // Use downbeat_offset as the metronome anchor so the click aligns to beat 1.
-    // Falls back to first_beat_time for backward compat.
-    _engine.firstBeatTime = analysis.downbeat_offset ?? analysis.first_beat_time
-    _engine.setBPM(effectiveBpm())
+    // Preview grid = final map grid: lead-in silence + downbeat on n·beatDur.
+    _syncEngineGrid()
 
     _render()
 
