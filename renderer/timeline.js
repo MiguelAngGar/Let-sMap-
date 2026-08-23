@@ -59,6 +59,20 @@ const FOLLOW_LEAD = 0.02  // where the playhead lands when playback pages over
 // jump is eased. PINCH_STEP is how much accumulated pinch makes a zoom step.
 const PRECISE_PX  = 20
 const PINCH_STEP  = 24
+// Zoom gestures. A physical wheel notch is one event, sent when the user clicks
+// the wheel. The OS-synthesised streams — a trackpad pinch, Cmd/Ctrl + two-finger
+// scroll, and the inertia macOS keeps sending after the fingers lift — arrive at
+// display refresh rate, so ~16 ms apart or less. NOTCH_GAP_MS separates the two:
+// a delta that is both coarse AND arrived after a pause is a real notch and
+// spends a level at once, exactly as before. Anything inside a stream is
+// accumulated and rationed by ZOOM_COOLDOWN_MS, so a single flick can no longer
+// burn the whole ZOOM_STEPS ladder.
+const NOTCH_PX         = 40
+const NOTCH_GAP_MS     = 45
+const ZOOM_COOLDOWN_MS = 150
+// This much quiet ends a gesture: accumulator and throttle both reset, so the
+// next notch or pinch starts from a clean slate instead of inheriting inertia.
+const GESTURE_GAP_MS   = 200
 
 class WaveformTimeline {
   /**
@@ -92,6 +106,11 @@ class WaveformTimeline {
     this._sdrag  = null     // in-flight scrollbar drag
     this._hoverX = null     // CSS px, for the hovered-time readout
     this._pinch  = 0        // accumulated trackpad pinch, see the wheel handler
+    // -Infinity, not 0: the first event of a gesture must read as "no previous
+    // one", so it is never throttled against a timestamp that never happened.
+    this._wheelAt = -Infinity  // last zoom wheel event (splits one gesture from the next)
+    this._zoomAt  = -Infinity  // last level spent (throttles a synthesised stream)
+    this._lastPx  = 0          // previous zoom delta — a repeat of it means a wheel
 
     this._W = 0
     this._H = 0
@@ -543,23 +562,51 @@ class WaveformTimeline {
       const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
       const px  = e.deltaMode === 1 ? raw * 16 : raw        // some mice report lines
 
-      // Zoom. A trackpad pinch reaches the page as ctrl+wheel with a stream of
-      // tiny deltas (that is how Chromium reports it), so it is accumulated and
-      // spends a level once it adds up — otherwise one pinch would fly through
-      // every level. A real Ctrl + notch is one big delta: one level, at once.
+      // Zoom. Two very different inputs land here as the same event:
+      //  • a physical wheel notch with Ctrl/Cmd held — one coarse delta, sent
+      //    only when the user clicks the wheel. One notch, one level, at once.
+      //  • an OS-synthesised stream — a trackpad pinch, Cmd/Ctrl + two-finger
+      //    scroll, or the inertia macOS keeps sending after the fingers lift.
+      //    Dozens of events per gesture, at display refresh rate, and on macOS
+      //    each delta can be far bigger than PINCH_STEP. Treating those like
+      //    notches spent one level per event and flew ×1 → ×512 in one flick,
+      //    so they are accumulated and then rationed in time instead.
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault()
         const { start, win } = this._window()
         const at = start + (this._localX(e) / this._cssWidth()) * win
 
+        const now = e.timeStamp || performance.now()
+        const gap = now - this._wheelAt
+        const prev = this._lastPx
+        this._wheelAt = now
+        this._lastPx  = px
+        // A pause means the previous gesture is over: drop its leftovers so
+        // trailing inertia cannot spend a level on the next deliberate one, and
+        // clear the throttle so the new gesture's first level lands at once.
+        if (gap > GESTURE_GAP_MS) { this._pinch = 0; this._zoomAt = -Infinity }
+
+        // A wheel notch is coarse AND repeats at exactly the same magnitude
+        // (the hardware sends one fixed step per detent), so a fast spin still
+        // counts every notch even though the events crowd together. A synthesised
+        // stream ramps up and decays, so consecutive deltas never match.
+        const coarse  = Math.abs(px) >= NOTCH_PX
+        const uniform = gap <= GESTURE_GAP_MS &&
+                        Math.abs(Math.abs(px) - Math.abs(prev)) < 0.5
         let step = 0
-        if (Math.abs(px) >= PINCH_STEP) {
+        if (coarse && (gap >= NOTCH_GAP_MS || uniform)) {
+          // Real wheel notch. Unchanged behaviour: one notch, one level, at once.
           step = Math.sign(px)
           this._pinch = 0
         } else {
           this._pinch += px
           if (Math.abs(this._pinch) >= PINCH_STEP) {
-            step = Math.sign(this._pinch)
+            // Inside a stream, so ration the levels. Without this a fast pinch
+            // (or its inertia) crosses the threshold on nearly every frame.
+            if (now - this._zoomAt >= ZOOM_COOLDOWN_MS) {
+              step = Math.sign(this._pinch)
+              this._zoomAt = now
+            }
             this._pinch = 0
           }
         }

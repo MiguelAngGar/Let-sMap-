@@ -38,7 +38,12 @@
         }
       ],
       "icon": "build/icon.png",
-      "category": "public.app-category.music"
+      "category": "public.app-category.music",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "gatekeeperAssess": false,
+      "notarize": false
     },
     "win": {
       "target": [

@@ -7,11 +7,12 @@ out/
 
 # Electron packager / builder
 release/
-build/
+build/*
 !build/icon.icns
 !build/icon.ico
 !build/icon.png
 !build/icon_master.svg
+!build/entitlements.mac.plist
 
 # Python
 __pycache__/

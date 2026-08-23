@@ -45,12 +45,12 @@ const T = {
     'offset.criteria_intro': "Only {secs} s before the first beat. The criteria ask for {min} s with no interactive objects, so you will have to start placing them later.",
     'offset.criteria_outro': "The song ends abruptly: {secs} s of outro. The criteria ask for more than {min} s after the last object.",
     'offset.criteria_long':  "The song already ends with {secs} s of silence. The criteria allow less than {max} s after the last object, so it would need trimming.",
-    'wave.zoom_in': "Zoom in (Ctrl + wheel)",
-    'wave.zoom_out': "Zoom out (Ctrl + wheel)",
+    'wave.zoom_in': "Zoom in ({mod} + wheel)",
+    'wave.zoom_out': "Zoom out ({mod} + wheel)",
     'wave.fit': "All",
     'wave.fit_title': "Show the whole song (double-click the waveform)",
     'wave.scroll': "Drag to move along the song",
-    'wave.help': "Wheel or two fingers: move\nCtrl + wheel or pinch: zoom\nDrag: place the playhead\nDouble-click: show everything",
+    'wave.help': "Wheel or two fingers: move\n{mod} + wheel or pinch: zoom\nDrag: place the playhead\nDouble-click: show everything",
     'offset.nudge': "offset",
     'offset.nudge_title': "Offset in ms — the default is the one that lands on the grid",
     'offset.nudge_reset': "Back to the detected offset",
@@ -198,12 +198,12 @@ const T = {
     'offset.criteria_intro': "Solo {secs} s hasta el primer beat. El criteria pide {min} s sin objetos interactivos, así que tendrás que empezar a ponerlos más tarde.",
     'offset.criteria_outro': "La canción acaba de golpe: {secs} s de salida. El criteria pide más de {min} s tras el último objeto.",
     'offset.criteria_long':  "La canción ya termina con {secs} s de silencio. El criteria admite menos de {max} s tras el último objeto, así que habría que recortarla.",
-    'wave.zoom_in': "Ampliar (Ctrl + rueda)",
-    'wave.zoom_out': "Reducir (Ctrl + rueda)",
+    'wave.zoom_in': "Ampliar ({mod} + rueda)",
+    'wave.zoom_out': "Reducir ({mod} + rueda)",
     'wave.fit': "Todo",
     'wave.fit_title': "Ver la canción completa (doble clic en el waveform)",
     'wave.scroll': "Arrastra para moverte por la canción",
-    'wave.help': "Rueda o dos dedos: mover\nCtrl + rueda o pinza: zoom\nArrastrar: colocar el cursor\nDoble clic: ver todo",
+    'wave.help': "Rueda o dos dedos: mover\n{mod} + rueda o pinza: zoom\nArrastrar: colocar el cursor\nDoble clic: ver todo",
     'offset.nudge': "offset",
     'offset.nudge_title': "Offset en ms; por defecto, el que cuadra con la cuadrícula",
     'offset.nudge_reset': "Volver al offset detectado",
@@ -351,12 +351,12 @@ const T = {
     'offset.criteria_intro': "Seulement {secs} s avant le premier temps. Les critères demandent {min} s sans objet interactif : il faudra donc commencer plus tard.",
     'offset.criteria_outro': "La chanson s'arrête net : {secs} s de fin. Les critères demandent plus de {min} s après le dernier objet.",
     'offset.criteria_long':  "La chanson finit déjà par {secs} s de silence. Les critères tolèrent moins de {max} s après le dernier objet : il faudrait la couper.",
-    'wave.zoom_in': "Zoomer (Ctrl + molette)",
-    'wave.zoom_out': "Dézoomer (Ctrl + molette)",
+    'wave.zoom_in': "Zoomer ({mod} + molette)",
+    'wave.zoom_out': "Dézoomer ({mod} + molette)",
     'wave.fit': "Tout",
     'wave.fit_title': "Voir toute la chanson (double-clic sur la forme d'onde)",
     'wave.scroll': "Faites glisser pour vous déplacer dans la chanson",
-    'wave.help': "Molette ou deux doigts : défiler\nCtrl + molette ou pincement : zoom\nGlisser : placer le curseur\nDouble-clic : tout voir",
+    'wave.help': "Molette ou deux doigts : défiler\n{mod} + molette ou pincement : zoom\nGlisser : placer le curseur\nDouble-clic : tout voir",
     'offset.nudge': "offset",
     'offset.nudge_title': "Offset en ms ; par défaut, celui qui tombe sur la grille",
     'offset.nudge_reset': "Revenir à l'offset détecté",
@@ -504,12 +504,12 @@ const T = {
     'offset.criteria_intro': "Nur {secs} s bis zum ersten Beat. Die Kriterien verlangen {min} s ohne interaktive Objekte — du musst also später anfangen.",
     'offset.criteria_outro': "Der Song endet abrupt: {secs} s Outro. Die Kriterien verlangen mehr als {min} s nach dem letzten Objekt.",
     'offset.criteria_long':  "Der Song endet schon mit {secs} s Stille. Die Kriterien erlauben weniger als {max} s nach dem letzten Objekt, das müsste gekürzt werden.",
-    'wave.zoom_in': "Hineinzoomen (Strg + Rad)",
-    'wave.zoom_out': "Herauszoomen (Strg + Rad)",
+    'wave.zoom_in': "Hineinzoomen ({mod} + Rad)",
+    'wave.zoom_out': "Herauszoomen ({mod} + Rad)",
     'wave.fit': "Alles",
     'wave.fit_title': "Ganzen Song anzeigen (Doppelklick auf die Wellenform)",
     'wave.scroll': "Ziehen, um sich im Song zu bewegen",
-    'wave.help': "Rad oder zwei Finger: bewegen\nStrg + Rad oder Pinch: Zoom\nZiehen: Abspielkopf setzen\nDoppelklick: alles anzeigen",
+    'wave.help': "Rad oder zwei Finger: bewegen\n{mod} + Rad oder Pinch: Zoom\nZiehen: Abspielkopf setzen\nDoppelklick: alles anzeigen",
     'offset.nudge': "Offset",
     'offset.nudge_title': "Offset in ms — Standard ist der, der aufs Raster fällt",
     'offset.nudge_reset': "Zurück zum erkannten Offset",
@@ -657,12 +657,12 @@ const T = {
     'offset.criteria_intro': "Só {secs} s até ao primeiro beat. O criteria pede {min} s sem objetos interativos, por isso terás de começar mais tarde.",
     'offset.criteria_outro': "A música acaba de repente: {secs} s de fim. O criteria pede mais de {min} s depois do último objeto.",
     'offset.criteria_long':  "A música já termina com {secs} s de silêncio. O criteria admite menos de {max} s depois do último objeto, teria de ser cortada.",
-    'wave.zoom_in': "Ampliar (Ctrl + roda)",
-    'wave.zoom_out': "Reduzir (Ctrl + roda)",
+    'wave.zoom_in': "Ampliar ({mod} + roda)",
+    'wave.zoom_out': "Reduzir ({mod} + roda)",
     'wave.fit': "Tudo",
     'wave.fit_title': "Ver a música completa (duplo clique na forma de onda)",
     'wave.scroll': "Arrasta para te mover pela música",
-    'wave.help': "Roda ou dois dedos: mover\nCtrl + roda ou pinça: zoom\nArrastar: colocar o cursor\nDuplo clique: ver tudo",
+    'wave.help': "Roda ou dois dedos: mover\n{mod} + roda ou pinça: zoom\nArrastar: colocar o cursor\nDuplo clique: ver tudo",
     'offset.nudge': "offset",
     'offset.nudge_title': "Offset em ms; por omissão, o que encaixa na grelha",
     'offset.nudge_reset': "Voltar ao offset detetado",
@@ -807,6 +807,18 @@ function setLang(code) {
   apply()
 }
 
+// The modifier key that zooms the waveform, spelled the way THIS machine spells
+// it. The handler accepts ctrlKey and metaKey either way (see renderer/timeline.js);
+// only the label changes, so a Mac is not told to press a key it does not have.
+// Every locale writes {mod} instead of the key name.
+const MOD_NAMES = { en: 'Ctrl', es: 'Ctrl', fr: 'Ctrl', de: 'Strg', pt: 'Ctrl' }
+
+function _modKey() {
+  const platform = window.api?.platform || navigator.platform || ''
+  if (platform === 'darwin' || /^Mac/i.test(platform)) return '⌘'
+  return MOD_NAMES[_lang] || 'Ctrl'
+}
+
 function t(key, vars = {}) {
   const dict = T[_lang] || T.en
   let str    = dict[key]
@@ -816,6 +828,8 @@ function t(key, vars = {}) {
   for (const [k, v] of Object.entries(vars)) {
     str = str.replaceAll(`{${k}}`, v)
   }
+  // Resolved last, so an explicit vars.mod still wins if a caller passes one.
+  if (str.includes('{mod}')) str = str.replaceAll('{mod}', _modKey())
   return str
 }
 

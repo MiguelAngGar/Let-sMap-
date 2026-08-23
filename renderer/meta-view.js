@@ -75,8 +75,13 @@ const MetaView = (() => {
 
   /** The dropped payload as a path or URL string, or null if unusable. */
   function _dropSource(dt) {
+    // Electron exposes the real path for anything dragged out of a file manager.
+    // An image dragged out of a browser, Photos/Preview, or an iCloud file that
+    // is not downloaded yet still produces a File — with an empty path. Those
+    // must fall through to the URL below, which the pipeline already handles,
+    // instead of failing outright.
     const file = dt?.files?.[0]
-    if (file) return file.path || null          // Electron exposes the real path
+    if (file?.path) return file.path
 
     const raw = (dt?.getData('text/uri-list') || dt?.getData('text/plain') || '').trim()
     const first = raw.split(/[\r\n]+/).find(l => l && !l.startsWith('#'))

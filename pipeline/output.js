@@ -1,6 +1,14 @@
 const fs   = require('fs')
 const path = require('path')
 
+// Stamped into Info.dat as the editor version. Read from package.json so there
+// is exactly one place the app's version lives — it used to be written by hand
+// here and had been left behind at 0.2.0 for two releases.
+const APP_VERSION = (() => {
+  try { return require('../package.json').version || '0.0.0' }
+  catch { return '0.0.0' }
+})()
+
 /** Strip characters illegal in folder names */
 function sanitize(name) {
   return (name || 'Unknown').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim() || 'Unknown'
@@ -67,7 +75,7 @@ async function generate({ audioPath, coverPath, meta, analysis, exportDir, mappe
     _customData: {
       _contributors: [],
       _editors: {
-        LetsMap: { version: '0.2.0' }
+        LetsMap: { version: APP_VERSION }
       }
     },
     _difficultyBeatmapSets: []

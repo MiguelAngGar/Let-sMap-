@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the hardened runtime.
+
+  Electron needs the first three: V8 compiles JavaScript at runtime, which a
+  hardened process is otherwise not allowed to do. The last one lets the app
+  spawn the ffmpeg binary that ships unpacked next to the asar — every audio
+  step goes through it (probe, tags, cover, pad + encode), so without this the
+  hardened runtime kills the whole pipeline.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

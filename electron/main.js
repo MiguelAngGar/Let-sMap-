@@ -1,4 +1,7 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, screen } = require('electron')
+// `screen` is deliberately NOT destructured here: touching it at load time
+// invokes its getter before app.whenReady(), which Electron documents as
+// unsupported. It is required where it is used instead.
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron')
 const path   = require('path')
 const os     = require('os')
 const Store  = require('electron-store')
@@ -43,10 +46,12 @@ const METRO_SOUNDS = ['click', 'beep', 'tick', 'block', 'thump']
 // ── Window ────────────────────────────────────────────────────────────────────
 let win
 
-// Auto-fit state. fitIgnoreUntil swallows the resize events our own
-// setContentSize causes, so they are not mistaken for the user grabbing the edge.
-let fitIgnoreUntil = 0
-let userResized    = false
+// Auto-fit state lives ON the window, not in module scope. _fitIgnoreUntil
+// swallows the resize events our own setContentSize causes, so they are not
+// mistaken for the user grabbing the edge; _userResized turns auto-fit off once
+// they have. Per-window because on macOS the app outlives its window: Cmd+W then
+// reopening builds a new one, and module-level flags would hand it the old
+// window's "the user already resized me" and kill auto-fit for the whole session.
 // The drop screen needs far less than this; keeping the floor at the starting
 // height means the window only ever grows for the BPM screen and shrinks back,
 // instead of collapsing to a letterbox every time you go back for another song.
@@ -77,9 +82,21 @@ function createWindow() {
     }
   })
 
-  // Once the user resizes the window by hand, stop second-guessing them
-  win.on('resize', () => {
-    if (Date.now() > fitIgnoreUntil) userResized = true
+  // Local alias so the listener below always talks about THIS window, even
+  // after `win` has been reassigned by a later createWindow() on macOS.
+  const w = win
+
+  // Fresh window, fresh auto-fit state.
+  w._fitIgnoreUntil = 0
+  w._userResized    = false
+
+  // Once the user resizes the window by hand, stop second-guessing them.
+  // Resizes the window manager drives are not the user grabbing an edge, so
+  // they must not latch it off: on macOS the green button, Split View, Stage
+  // Manager and moving to a display of a different scale all fire resize.
+  w.on('resize', () => {
+    if (w.isDestroyed() || w.isFullScreen() || w.isMaximized()) return
+    if (Date.now() > w._fitIgnoreUntil) w._userResized = true
   })
 
   win.loadFile(path.join(__dirname, '../renderer/index.html'))
@@ -313,15 +330,17 @@ ipcMain.handle('meta:select-cover', async () => {
  */
 ipcMain.handle('window:fit-height', (event, height) => {
   const w = BrowserWindow.fromWebContents(event.sender)
-  if (!w || userResized || w.isMaximized() || w.isFullScreen()) return
+  if (!w || w.isDestroyed() || w._userResized || w.isMaximized() || w.isFullScreen()) return
 
+  // Required lazily: the screen module is only usable after the ready event.
+  const { screen } = require('electron')
   const area     = screen.getDisplayMatching(w.getBounds()).workArea
   const [cw, ch] = w.getContentSize()
   const target   = Math.max(MIN_FIT_HEIGHT,
                             Math.min(Math.round(Number(height) || 0), area.height - 80))
   if (!Number.isFinite(target) || Math.abs(target - ch) < 8) return
 
-  fitIgnoreUntil = Date.now() + 600
+  w._fitIgnoreUntil = Date.now() + 600
   w.setContentSize(cw, target, false)
 
   // Growing must not push the window off the bottom of the screen
