@@ -36,7 +36,8 @@
  * ─────────────────────────────
  *  • the silence around the music, as named bands — the whole beats added in
  *    front, the sub-beat offset that lands beat 1 on the grid, and the outro
- *    (always at least a visible sliver wide; hover one for its exact length)
+ *    (always at least a visible sliver wide, labelled in place where it fits;
+ *    the exact figures live in the readout below, which can also change them)
  *  • the waveform of the window, peaks pulled from the engine's peak index
  *    (exact samples at the deepest zoom levels — see AudioEngine.peaksFor)
  *  • the map's beat grid from t = 0, thinned out automatically, with every
@@ -106,7 +107,6 @@ class WaveformTimeline {
     this._drag   = null     // in-flight canvas drag
     this._sdrag  = null     // in-flight scrollbar drag
     this._hoverX = null     // CSS px, for the hovered-time readout
-    this._hoverRegion = null // silence band under the pointer, see _regions()
     this._pinch  = 0        // accumulated trackpad pinch, see the wheel handler
     // -Infinity, not 0: the first event of a gesture must read as "no previous
     // one", so it is never throttled against a timestamp that never happened.
@@ -351,8 +351,6 @@ class WaveformTimeline {
     this._drawMarkers(ctx, toX, leadIn, HD, mid, maxAmp)
     this._drawHover(ctx, start, win, HD)
     this._drawHead(ctx, toX(cur), HD)
-    // Last, so the hovered band's numbers are never covered by anything.
-    this._drawRegionInfo(ctx, toX)
 
     this._updateTimeDisplay(cur, engine.duration)
     this._updateScrollbar()
@@ -399,29 +397,6 @@ class WaveformTimeline {
     return out
   }
 
-  /** Which band the pointer is inside, or null. Narrow bands get a grab margin. */
-  _regionAt(cssX) {
-    if (cssX == null) return null
-    const { start, win } = this._window()
-    const x   = cssX * this._dpr
-    // A 40 ms offset band at ×1 is a fraction of a pixel; without a margin it
-    // would be unhoverable, which would defeat the point of labelling it.
-    const grab = 3 * this._dpr
-    let best = null
-    let bestDist = Infinity
-    for (const r of this._regions()) {
-      const x0 = ((r.t0 - start) / win) * this._W
-      const x1 = ((r.t1 - start) / win) * this._W
-      if (x >= x0 - grab && x <= x1 + grab) {
-        // Overlapping grab margins: the nearest band centre wins, so the
-        // boundary between `added` and `offset` picks one and not both.
-        const d = Math.abs(x - (x0 + x1) / 2) - (x1 - x0) / 2
-        if (d < bestDist) { bestDist = d; best = r }
-      }
-    }
-    return best
-  }
-
   /** Length of a band in words: milliseconds or seconds, plus whole beats. */
   _regionText(r) {
     // Rounded to the microsecond first: the band edges come out of a chain of
@@ -447,10 +422,22 @@ class WaveformTimeline {
     return window.t?.(`wave.band.${r.key}`) || r.key
   }
 
-  /** The bands themselves, behind the waveform. The hovered one is lit up. */
+  /**
+   * The bands themselves, behind the waveform, each labelled in place.
+   *
+   * There is deliberately no hover state. Highlighting a band on hover only
+   * repeated what its own label already said, so the mouse had nothing to
+   * reveal — and the numbers that DO need somewhere to live (a 200 ms offset is
+   * thinner than a pixel at ×1) belong in the readout under the waveform, where
+   * they can be read and adjusted, not in a tooltip.
+   *
+   * Each band shows as much as it has room for: name and length, length alone,
+   * or nothing. Measured rather than guessed, because "silencio añadido" and
+   * "outro" are nowhere near the same width.
+   */
   _drawRegions(ctx, toX, mid, maxAmp, H) {
-    const hovered = this._drag ? null : this._regionAt(this._hoverX)
-    this._hoverRegion = hovered
+    const fs = Math.round(10 * this._dpr)
+    ctx.font = `${fs}px -apple-system, system-ui, sans-serif`
 
     for (const r of this._regions()) {
       const x0 = toX(r.t0)
@@ -458,84 +445,36 @@ class WaveformTimeline {
       // Never let it vanish: at ×1 a band can be a fraction of a pixel wide,
       // and "the silence is not visible" was exactly the complaint.
       const w  = Math.max(x1 - x0, 2 * this._dpr)
-      const on = hovered && hovered.key === r.key
 
-      ctx.fillStyle = on ? this._colors.silenceOn : this._colors.silence
+      ctx.fillStyle = this._colors.silence
       ctx.fillRect(x0, 0, w, H)
-
-      if (on) {
-        // Edges, so a band narrower than its own label still reads as a region
-        // with a start and an end rather than a smudge.
-        const lw = Math.max(1, Math.round(this._dpr))
-        ctx.fillStyle = this._colors.silenceEdge
-        ctx.fillRect(Math.round(x0), 0, lw, H)
-        ctx.fillRect(Math.round(x0 + w) - lw, 0, lw, H)
-      }
 
       // Centre the label on the VISIBLE part of the band: zoomed in, a band
       // usually starts off-screen to the left, and centring on its true middle
       // would put the text outside the canvas.
       const visX0 = Math.max(x0, 0)
       const visX1 = Math.min(x0 + w, this._W)
-      if (on || visX1 - visX0 < 46 * this._dpr) continue
+      const room  = visX1 - visX0 - 6 * this._dpr
+      if (room <= 0) continue
+
+      const name = this._regionName(r)
+      const text = this._regionText(r)
+      const fits = str => ctx.measureText(str).width <= room
 
       ctx.fillStyle    = this._colors.silenceText
-      ctx.font         = `${Math.round(10 * this._dpr)}px -apple-system, system-ui, sans-serif`
       ctx.textAlign    = 'center'
       ctx.textBaseline = 'middle'
-      // Vertically centred, which is the only band of the canvas that is free:
-      // the zoom tools float over the top-right corner and the hovered-band box
-      // sits along the bottom. There is no waveform behind a silence band to
-      // compete with anyway.
+      // Vertically centred: the zoom tools float over the top-right corner and
+      // the hovered-time readout runs along the top, so the middle is the one
+      // free band — and a silence band has no waveform behind it to compete with.
       const cx = (visX0 + visX1) / 2
-      ctx.fillText(this._regionName(r), cx, mid - 7 * this._dpr)
-      ctx.fillText(this._regionText(r), cx, mid + 7 * this._dpr)
+      if (fits(name) && fits(text)) {
+        ctx.fillText(name, cx, mid - 7 * this._dpr)
+        ctx.fillText(text, cx, mid + 7 * this._dpr)
+      } else if (fits(text)) {
+        ctx.fillText(text, cx, mid)
+      }
     }
-  }
-
-  /**
-   * The hovered band's name and length, as a box.
-   *
-   * Drawn on top rather than inside the band because the band that most needs
-   * reading is the offset one, which is far too thin to hold text.
-   */
-  _drawRegionInfo(ctx, toX) {
-    const r = this._hoverRegion
-    if (!r) return
-
-    const name = this._regionName(r).toUpperCase()
-    const text = this._regionText(r)
-    const fs   = Math.round(10 * this._dpr)
-    ctx.font   = `${fs}px -apple-system, system-ui, sans-serif`
-    const wName = ctx.measureText(name).width
-    const wText = ctx.measureText(text).width
-
-    const padX = 6 * this._dpr
-    const boxW = Math.max(wName, wText) + padX * 2
-    const boxH = 30 * this._dpr
-
-    const x0  = toX(r.t0)
-    const x1  = toX(r.t1)
-    const mid = (Math.max(x0, 0) + Math.min(x1, this._W)) / 2
-    const bx  = Math.min(Math.max(mid - boxW / 2, 0), Math.max(0, this._W - boxW))
-    const by  = this._H - boxH - 16 * this._dpr
-
-    ctx.fillStyle = this._colors.hoverBg
-    ctx.fillRect(bx, by, boxW, boxH)
-    // Outlined, so it reads as a box over a dark waveform rather than a smudge
-    const lw = Math.max(1, Math.round(this._dpr))
-    ctx.fillStyle = this._colors.silenceEdge
-    ctx.fillRect(bx, by, boxW, lw)
-    ctx.fillRect(bx, by + boxH - lw, boxW, lw)
-    ctx.fillRect(bx, by, lw, boxH)
-    ctx.fillRect(bx + boxW - lw, by, lw, boxH)
-
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'top'
-    ctx.fillStyle    = this._colors.silenceText
-    ctx.fillText(name, bx + padX, by + 5 * this._dpr)
-    ctx.fillStyle    = this._colors.hoverText
-    ctx.fillText(text, bx + padX, by + 17 * this._dpr)
   }
 
   /** Peaks for the visible window, split into played / unplayed at the playhead. */
@@ -861,8 +800,6 @@ class WaveformTimeline {
       head:        '#b0a0ff',
       headGlow:    'rgba(124, 106, 247, 0.22)',
       silence:     'rgba(255, 255, 255, 0.07)',
-      silenceOn:   'rgba(150, 132, 255, 0.16)',
-      silenceEdge: 'rgba(160, 145, 255, 0.55)',
       silenceText: 'rgba(255, 255, 255, 0.45)',
       grid:        'rgba(255, 255, 255, 0.10)',
       gridBar:     'rgba(255, 255, 255, 0.22)',
@@ -877,8 +814,6 @@ class WaveformTimeline {
       head:        '#5a4bd1',
       headGlow:    'rgba(108, 92, 231, 0.18)',
       silence:     'rgba(0, 0, 40, 0.06)',
-      silenceOn:   'rgba(100, 80, 220, 0.13)',
-      silenceEdge: 'rgba(90, 75, 209, 0.5)',
       silenceText: 'rgba(0, 0, 40, 0.45)',
       grid:        'rgba(0, 0, 40, 0.11)',
       gridBar:     'rgba(0, 0, 40, 0.24)',

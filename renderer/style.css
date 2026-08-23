@@ -656,17 +656,22 @@ body.macos #titlebar { padding-left: 80px; }
 /* ── Offset info ──────────────────────────────────────────────────────────── */
 /* The readout and the fine-offset field share one row: the two computed stats
    on the left, the field pinned to the right so it never shifts as they change */
+/* Wrapping, because the readout now carries three stats — intro, beat 1 and
+   outro, two of them with steppers — and forcing them onto one 560 px line
+   would squeeze the numbers that are the whole point of the row. */
 .offset-row {
   display:     flex;
   align-items: center;
-  gap:         20px;
+  flex-wrap:   wrap;
+  gap:         8px 20px;
   width:       100%;
   max-width:   560px;
 }
 
 .offset-info {
   display:     flex;
-  gap:         20px;
+  flex-wrap:   wrap;
+  gap:         8px 18px;
   width:       100%;
   max-width:   560px;
   min-height:  18px;
