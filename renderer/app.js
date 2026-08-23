@@ -33,7 +33,76 @@ const exportDirEl  = document.getElementById('export-dir')
 const mapperNameEl = document.getElementById('mapper-name')
 const langSelectEl = document.getElementById('lang-select')
 const oggQualityEl = document.getElementById('ogg-quality')
-const matchQualEl  = document.getElementById('match-quality')
+const metroSoundEl = document.getElementById('metro-sound')
+const leadInEl     = document.getElementById('lead-in-seconds')
+const coldEndEl    = document.getElementById('cold-end-seconds')
+const silenceNoteEl = document.getElementById('silence-note')
+
+// ScoreSaber ranking criteria: intro ≥ 1.5 s, outro > 2 s and < 15 s
+const CRITERIA_LEAD_IN  = 1.5
+const CRITERIA_COLD_END = 2.0
+const SILENCE_MAX       = 15
+
+/** Show one line of feedback under the two fields, or nothing. */
+function _setSilenceNote(key, vars) {
+  if (!silenceNoteEl) return
+  if (!key) {
+    silenceNoteEl.classList.add('hidden')
+    silenceNoteEl.removeAttribute('data-i18n')
+    silenceNoteEl.textContent = ''
+    return
+  }
+  // Keep the key on the element so a language change re-renders it
+  silenceNoteEl.setAttribute('data-i18n', key)
+  silenceNoteEl.textContent = t(key, vars)
+  silenceNoteEl.classList.remove('hidden')
+}
+
+/**
+ * Explain whatever is off about the two values: out of range first (the app is
+ * about to change what you typed), then the ranking criteria.
+ *
+ * With clamp = true the fields are rewritten to the value that will actually be
+ * stored, so nothing is silently corrected behind the user's back on save.
+ */
+function syncSilenceNote({ clamp = false } = {}) {
+  // Each field with the value it falls back to when left empty
+  const fields = [[leadInEl, CRITERIA_LEAD_IN], [coldEndEl, CRITERIA_COLD_END]]
+    .filter(([el]) => el)
+  let outOfRange = false
+
+  for (const [el, fallback] of fields) {
+    // Mid-typing an empty field is fine; on the way out it gets its default
+    // back, so what is stored is never different from what is on screen.
+    if (el.value.trim() === '') {
+      el.classList.remove('out-of-range')
+      if (clamp) el.value = String(fallback)
+      continue
+    }
+
+    const raw = parseFloat(el.value)
+    const bad = !Number.isFinite(raw) || raw < 0 || raw > SILENCE_MAX
+    el.classList.toggle('out-of-range', bad)
+    if (!bad) continue
+    outOfRange = true
+    if (clamp) {
+      const fixed = !Number.isFinite(raw) ? fallback : Math.min(SILENCE_MAX, Math.max(0, raw))
+      el.value = String(Math.round(fixed * 100) / 100)
+      el.classList.remove('out-of-range')
+    }
+  }
+
+  // Explain the range whether we just corrected it or the user is still typing
+  if (outOfRange) return _setSilenceNote('settings.silence_range', { max: SILENCE_MAX })
+
+  const lead = parseFloat(leadInEl?.value)
+  const cold = parseFloat(coldEndEl?.value)
+
+  const below = (Number.isFinite(lead) && lead < CRITERIA_LEAD_IN) ||
+                (Number.isFinite(cold) && cold < CRITERIA_COLD_END)
+  _setSilenceNote(below ? 'settings.silence_warn' : null,
+                  { lead: CRITERIA_LEAD_IN, cold: CRITERIA_COLD_END })
+}
 const detectBtn    = document.getElementById('detect-btn')
 const detectHintEl = document.getElementById('detect-hint')
 
@@ -50,11 +119,6 @@ function hideDetectHint() {
   if (!detectHintEl) return
   detectHintEl.classList.add('hidden')
   detectHintEl.classList.remove('ok', 'err')
-}
-
-// Grey out the fixed-quality dropdown while "keep original quality" is on
-function syncQualityToggle() {
-  if (oggQualityEl && matchQualEl) oggQualityEl.disabled = matchQualEl.checked
 }
 
 // ── File extension guard ──────────────────────────────────────────────────
@@ -106,7 +170,55 @@ function showView(name) {
   viewDrop.classList.toggle('active', name === 'drop')
   viewBpm.classList.toggle('active',  name === 'bpm')
   viewMeta?.classList.toggle('active', name === 'meta')
+  fitWindow()
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WINDOW AUTO-FIT
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The screens are not the same height, and the BPM one changes as the criteria
+// notes come and go. A window sized for the worst case is a mostly-empty box the
+// rest of the time, so the renderer measures what the active view actually needs
+// and the main process resizes to that (clamped, and dropped entirely once the
+// user resizes by hand).
+//
+// The measurement is the sum of the visible children plus gaps and padding.
+// Margins are deliberately left out: .bpm-actions has margin-top:auto, whose
+// used value IS the leftover space we are trying to get rid of — counting it
+// would make the window grow every time it was measured.
+
+let _fitQueued = false
+
+function fitWindow() {
+  if (_fitQueued || !window.api?.fitHeight) return
+  _fitQueued = true
+
+  // Two frames: one for the class change, one for the layout it causes
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    _fitQueued = false
+
+    const view = document.querySelector('.view.active')
+    if (!view) return
+
+    const cs  = getComputedStyle(view)
+    const gap = parseFloat(cs.rowGap || cs.gap || '0') || 0
+    let h = parseFloat(cs.paddingTop || 0) + parseFloat(cs.paddingBottom || 0)
+
+    const kids = Array.from(view.children)
+      .filter(el => getComputedStyle(el).display !== 'none')
+    kids.forEach((el, i) => {
+      h += el.getBoundingClientRect().height + (i ? gap : 0)
+    })
+
+    const header = document.getElementById('titlebar')
+    const chrome = header ? header.getBoundingClientRect().height : 0
+
+    window.api.fitHeight(Math.ceil(h + chrome + 6))   // 6 px of slack for margins
+  }))
+}
+
+window.fitWindow = fitWindow
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DROP ZONE
@@ -157,7 +269,12 @@ async function processSongFile(filePath, fileName) {
     originalPath: res.originalPath,
     analysis:     res.analysis,
     candidates:   res.candidates,
-    originalName: res.originalName
+    originalName: res.originalName,
+    // The preview must show the same silence the export will add
+    minLead:      savedSettings?.leadInSeconds ?? 1.5,
+    // For the outro read-out: what the song already has, and what we aim for
+    trailingSilence: res.trailingSilence ?? 0,
+    coldEnd:         res.coldEnd ?? savedSettings?.coldEndSeconds ?? 2
   })
 }
 
@@ -238,8 +355,10 @@ async function loadSettings() {
   exportDirEl.title  = exportDirEl.value
   mapperNameEl.value = savedSettings.mapperName || ''
   if (oggQualityEl)  oggQualityEl.value = String(savedSettings.oggQuality ?? 10)
-  if (matchQualEl)   matchQualEl.checked = savedSettings.matchSourceQuality ?? true
-  syncQualityToggle()
+  if (metroSoundEl)  metroSoundEl.value = savedSettings.metroSound || 'click'
+  if (leadInEl)      leadInEl.value  = String(savedSettings.leadInSeconds  ?? 1.5)
+  if (coldEndEl)     coldEndEl.value = String(savedSettings.coldEndSeconds ?? 2)
+  syncSilenceNote()
   // Apply persisted language
   const lang = savedSettings.language || 'system'
   window.i18n.setLang(lang)
@@ -256,28 +375,41 @@ async function openSettings() {
   exportDirEl.title  = exportDirEl.value
   mapperNameEl.value = savedSettings.mapperName || ''
   if (oggQualityEl)  oggQualityEl.value = String(savedSettings.oggQuality ?? 10)
-  if (matchQualEl)   matchQualEl.checked = savedSettings.matchSourceQuality ?? true
-  syncQualityToggle()
+  if (metroSoundEl)  metroSoundEl.value = savedSettings.metroSound || 'click'
+  if (leadInEl)      leadInEl.value  = String(savedSettings.leadInSeconds  ?? 1.5)
+  if (coldEndEl)     coldEndEl.value = String(savedSettings.coldEndSeconds ?? 2)
+  syncSilenceNote()
   if (langSelectEl)  langSelectEl.value = savedSettings.language || 'system'
+  // Choosing a metronome voice plays it, so a song running behind the panel
+  // would be competing with the preview: pause it and pick it up on the way out
+  window.BpmView?.suspendPlayback?.()
   modalOverlay.classList.remove('hidden')
   mapperNameEl.focus()
 }
 
 function closeSettings() {
   modalOverlay.classList.add('hidden')
+  // Back to playing, with whatever voice is now configured
+  window.BpmView?.resumePlayback?.()
 }
 
 async function saveSettings() {
+  // Bring any out-of-range value into range in the visible field first
+  syncSilenceNote({ clamp: true })
   const newLang = langSelectEl ? langSelectEl.value : 'system'
   savedSettings = await window.api.saveSettings({
     exportDir:  exportDirEl.value.trim(),
     exportDirAuto: exportDirFromAuto,
     mapperName: mapperNameEl.value.trim(),
     oggQuality: oggQualityEl ? parseInt(oggQualityEl.value, 10) : 10,
-    matchSourceQuality: matchQualEl ? matchQualEl.checked : true,
+    metroSound: metroSoundEl ? metroSoundEl.value : 'click',
+    leadInSeconds:  leadInEl  ? parseFloat(leadInEl.value)  : 1.5,
+    coldEndSeconds: coldEndEl ? parseFloat(coldEndEl.value) : 2,
     language:   newLang
   })
   window.i18n.setLang(newLang)
+  // A song may already be loaded behind the modal — switch its voice live
+  window.BpmView?.setMetroSound?.(savedSettings.metroSound || 'click')
   closeSettings()
 }
 
@@ -285,6 +417,22 @@ settingsBtn .addEventListener('click', openSettings)
 modalClose  .addEventListener('click', closeSettings)
 cancelBtn   .addEventListener('click', closeSettings)
 saveBtn     .addEventListener('click', saveSettings)
+// Picking a metronome voice plays it — choosing a sound you cannot hear is
+// pointless, and the preview needs no song loaded (see AudioEngine.previewSound)
+metroSoundEl?.addEventListener('change', () => {
+  const sound = metroSoundEl.value
+  // Prefer the loaded song's own audio context; only fall back to a standalone
+  // one when there is nothing loaded (no song = no context to borrow)
+  try {
+    if (window.BpmView?.previewMetro?.(sound)) return
+    const vol = (savedSettings.metroVolume ?? 80) / 100
+    window.AudioEngine?.previewSound?.(sound, vol)
+  } catch (_) {}
+})
+leadInEl   ?.addEventListener('input',  () => syncSilenceNote())
+coldEndEl  ?.addEventListener('input',  () => syncSilenceNote())
+leadInEl   ?.addEventListener('change', () => syncSilenceNote({ clamp: true }))
+coldEndEl  ?.addEventListener('change', () => syncSilenceNote({ clamp: true }))
 browseBtn   .addEventListener('click', async () => {
   const chosen = await window.api.selectFolder()
   if (chosen) {
@@ -319,7 +467,6 @@ detectBtn?.addEventListener('click', async () => {
     detectHintEl.classList.add('err')
   }
 })
-if (matchQualEl) matchQualEl.addEventListener('change', syncQualityToggle)
 
 // Close on overlay click — but only if the press STARTED on the overlay.
 // Otherwise selecting text inside the panel and releasing the mouse outside

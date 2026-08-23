@@ -32,7 +32,13 @@
 
 const LOOKAHEAD         = 0.12   // seconds to look ahead when scheduling
 const SCHEDULE_INTERVAL = 20     // ms between scheduler wakeups
-const WAVEFORM_POINTS   = 1400   // number of peak samples to store
+const WAVEFORM_POINTS   = 1400   // number of peak samples to store (overview)
+// One peak per 256 samples (~5.8 ms at 44.1 kHz). This is the index the zoomed
+// waveform is drawn from: a 3-minute song costs ~140 KB and any window can be
+// aggregated out of it in a fraction of a millisecond. Below ~2 px per index
+// entry peaksFor() reads the decoded samples directly instead, so the deepest
+// zoom levels show the real shape of the transient rather than a 6 ms block.
+const PEAK_STEP         = 256
 
 class AudioEngine {
   constructor() {
@@ -55,11 +61,15 @@ class AudioEngine {
                                   // exported song, so the preview mirrors the map
 
     // Volume levels (adjustable before or after init via setters below)
-    this.songVolume    = 0.75     // 75% — prominent but leaves room for metronome
-    this.metroVolume   = 1.00     // 100% — always clearly audible
+    this.songVolume    = 0.50     // 50% — leaves plenty of room for the clicks
+    this.metroVolume   = 0.80     // 80% — clearly audible without being harsh
+    this.metroSound    = 'click'  // one of METRO_SOUNDS
 
     // Preprocessed waveform — built once in loadFile
     this.waveformData  = null     // Float32Array of normalised peak amplitudes
+    this.sampleRate    = 44100    // decoded buffer rate (updated in loadFile)
+    this._peakIndex    = null     // Float32Array, one peak per PEAK_STEP samples
+    this._peakMax      = 0        // global peak, used to normalise every window
     this._audioDuration = 0       // decoded buffer duration (s) — see duration getter
 
     // Callbacks
@@ -84,6 +94,8 @@ class AudioEngine {
     this._buffer = await this._ctx.decodeAudioData(raw)
 
     this._audioDuration = this._buffer.duration
+    this.sampleRate     = this._buffer.sampleRate
+    this._peakIndex     = this._buildPeakIndex(this._buffer)
     this.waveformData   = this._buildWaveform(this._buffer)
     this._pauseOffset   = 0
   }
@@ -187,8 +199,9 @@ class AudioEngine {
    * @param {object} g
    * @param {number} g.bpm     Effective BPM (doubling already applied)
    * @param {number} g.leadIn  Silence that will be prepended to the export (s)
-   * @param {number} g.anchor  PREVIEW-time of beat 1 (downbeat) — grid-aligned,
-   *                           half-beat shift already applied by the caller
+   * @param {number} g.anchor  PREVIEW-time of beat 1 (downbeat), half-beat
+   *                           shift included. Informational only: the click
+   *                           grid comes from bpm + leadIn (see _startScheduler)
    *
    * The current position is preserved in AUDIO terms: if the lead-in length
    * changes, the playhead keeps pointing at the same music.
@@ -230,6 +243,57 @@ class AudioEngine {
   setMetroVolume(v) {
     this.metroVolume = v
     if (this._metroGain) this._metroGain.gain.value = v
+  }
+
+  /**
+   * Pick the metronome voice. Takes effect on the next scheduled beat, so it can
+   * be changed mid-playback.
+   * @param {string} name  one of METRO_SOUNDS
+   */
+  setMetroSound(name) {
+    this.metroSound = METRO_SOUNDS.includes(name) ? name : 'click'
+  }
+
+  /**
+   * Play one hit on THIS engine's context, at the metronome's own volume.
+   *
+   * Previewing through a second AudioContext while this one is running is what
+   * made the old sound cut out and the audio misbehave — two contexts fighting
+   * over the same output device. When a song is loaded, the preview belongs here.
+   *
+   * @param {string} name
+   * @returns {boolean} false when there is no context yet (nothing loaded)
+   */
+  previewSound(name) {
+    if (!this._ctx || !this._metroGain) return false
+    if (this._ctx.state === 'suspended') this._ctx.resume()
+    _renderClick(this._ctx, this._metroGain, this._ctx.currentTime + 0.02,
+                 METRO_SOUNDS.includes(name) ? name : 'click')
+    return true
+  }
+
+  /**
+   * Play one hit of a voice on its own, for the Settings preview. Uses a lazy
+   * context of its own so it works with no song loaded.
+   * @param {string} name
+   * @param {number} [volume=0.8]
+   */
+  static previewSound(name, volume = 0.8) {
+    _previewCtx = _previewCtx || new AudioContext()
+    if (_previewCtx.state === 'suspended') _previewCtx.resume()
+
+    const gain = _previewCtx.createGain()
+    gain.gain.value = Math.max(0, Math.min(1, volume))
+    gain.connect(_previewCtx.destination)
+
+    _renderClick(_previewCtx, gain, _previewCtx.currentTime + 0.02,
+                 METRO_SOUNDS.includes(name) ? name : 'click')
+
+    // Let go of the audio device once the hit has rung out; the next preview
+    // resumes it. Holding a second context open is asking for trouble on
+    // Windows, where drivers can take the output exclusively.
+    clearTimeout(_previewIdle)
+    _previewIdle = setTimeout(() => { _previewCtx?.suspend?.() }, 600)
   }
 
   /** Stop playback, rewind to zero. */
@@ -288,41 +352,130 @@ class AudioEngine {
     return data
   }
 
+  /**
+   * Peak envelope for an arbitrary window of AUDIO time, one value per column.
+   *
+   * @param {number} startSec  window start in audio time (may be negative —
+   *                           those columns come back as 0, which is what the
+   *                           prepended silence looks like)
+   * @param {number} endSec    window end in audio time
+   * @param {number} points    number of columns to fill
+   * @returns {Float32Array}   peaks in [0, 1], normalised by the GLOBAL peak so
+   *                           a quiet passage still looks quiet when zoomed in
+   *
+   * Cheap enough to call every animation frame: the whole song is ~36 k index
+   * entries, and the exact-sample path only ever runs on windows of a couple of
+   * seconds (~90 k samples).
+   */
+  peaksFor(startSec, endSec, points) {
+    const n   = Math.max(1, Math.floor(points))
+    const out = new Float32Array(n)
+    if (!this._buffer || !(endSec > startSec)) return out
+
+    const sr   = this.sampleRate
+    const dur  = this._audioDuration
+    const span = endSec - startSec
+    // Exact samples once a column covers less than two index entries
+    const exact = (span * sr / n) < PEAK_STEP * 2
+    const idx   = this._peakIndex
+
+    const ch0 = exact ? this._buffer.getChannelData(0) : null
+    const ch1 = exact
+      ? (this._buffer.numberOfChannels > 1 ? this._buffer.getChannelData(1) : ch0)
+      : null
+
+    for (let i = 0; i < n; i++) {
+      const t0 = Math.max(0, startSec + (span * i) / n)
+      const t1 = Math.min(dur, startSec + (span * (i + 1)) / n)
+      if (t1 <= t0) continue
+
+      let peak = 0
+      if (exact) {
+        const s0 = Math.floor(t0 * sr)
+        const s1 = Math.max(s0 + 1, Math.ceil(t1 * sr))
+        const end = Math.min(s1, ch0.length)
+        for (let j = s0; j < end; j++) {
+          const abs = Math.abs((ch0[j] + ch1[j]) * 0.5)
+          if (abs > peak) peak = abs
+        }
+      } else {
+        const e0  = Math.floor((t0 * sr) / PEAK_STEP)
+        const e1  = Math.max(e0 + 1, Math.ceil((t1 * sr) / PEAK_STEP))
+        const end = Math.min(e1, idx.length)
+        for (let j = e0; j < end; j++) {
+          if (idx[j] > peak) peak = idx[j]
+        }
+      }
+      out[i] = this._peakMax > 0 ? peak / this._peakMax : 0
+    }
+
+    return out
+  }
+
+  /**
+   * One peak per PEAK_STEP samples, plus the global peak used to normalise.
+   * Raw (un-normalised) values are stored so peaksFor can normalise itself.
+   */
+  _buildPeakIndex(buffer) {
+    const n     = buffer.length
+    const count = Math.max(1, Math.ceil(n / PEAK_STEP))
+    const idx   = new Float32Array(count)
+
+    const ch0 = buffer.getChannelData(0)
+    const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : ch0
+
+    let globalMax = 0
+    for (let i = 0; i < count; i++) {
+      let peak  = 0
+      const end = Math.min(i * PEAK_STEP + PEAK_STEP, n)
+      for (let j = i * PEAK_STEP; j < end; j++) {
+        const abs = Math.abs((ch0[j] + ch1[j]) * 0.5)
+        if (abs > peak) peak = abs
+      }
+      idx[i] = peak
+      if (peak > globalMax) globalMax = peak
+    }
+
+    this._peakMax = globalMax
+    return idx
+  }
+
   // ── Metronome scheduler ────────────────────────────────────────────────────
 
   /**
-   * Compute the ctx-time of the first beat and seed _nextBeatTime,
-   * then kick off the scheduling loop.
+   * Seed _nextBeatTime on the map's beat grid, then start the scheduling loop.
    *
    * KEY RELATIONSHIP
    * ─────────────────
-   *   _startTime  maps audio-time ↔ ctx-time:
-   *     ctx_time_of_audio_position_T  =  _startTime + T
+   *   _startTime maps preview-time ↔ ctx-time:
+   *     ctx_time_of_preview_position_T  =  _startTime + T
    *
-   *   Beat 1 occurs at audio position `firstBeatTime` (from Python analysis).
-   *   After applying optional half-beat shift, beat 1's ctx-time is:
-   *     firstBeatCtx = _startTime + firstBeatTime + halfShift
+   *   The clicks sit on the grid of the EXPORTED map: beat K is at
+   *   K × beatDur from preview-time 0 (the start of the padded audio), which is
+   *   exactly where Beat Saber will put its beats.
    *
-   *   Beat N ctx-time = firstBeatCtx + N × beatDur
+   *   That is what makes the half-beat button audible. It changes how much
+   *   silence goes in front of the music, so the music moves against this fixed
+   *   grid: with the shift on, the clicks land on what were the off-beats. If
+   *   the clicks came from the detected beat instead, both would move together
+   *   and toggling the button would sound like nothing happened.
    *
-   * After seeking, _startTime is updated by play(), so this formula
-   * automatically yields the correct next beat for the new position.
+   * After seeking, _startTime is updated by play(), so this automatically
+   * yields the correct next beat for the new position.
    */
   _startScheduler() {
-    const beatDur      = 60 / this.bpm
-    const anchor       = this.firstBeatTime          // preview-time of beat 1
-    const firstBeatCtx = this._startTime + anchor
+    const beatDur = 60 / this.bpm
 
-    // The beat grid extends BACKWARDS from the anchor (the downbeat can sit
-    // several beats into the music), but clicks only make sense where there
-    // is audio: the first click is the first grid beat at/after the end of
-    // the lead-in silence. minN = first grid index at preview-time ≥ leadIn.
-    const minN = Math.ceil((this.leadIn - anchor) / beatDur - 1e-9)
+    // Clicks run through the lead-in silence too, as a count-in: those beats
+    // exist in the exported map, and hearing them is how you tell how much
+    // silence is in front of the music — and whether the music lands on the
+    // grid when it starts.
+    const minN = 0
 
-    // Find the next beat index that hasn't fired yet
-    const elapsed = this._ctx.currentTime - firstBeatCtx
+    // Find the next grid line that hasn't fired yet
+    const elapsed = this._ctx.currentTime - this._startTime
     const nextN   = Math.max(minN, Math.ceil(elapsed / beatDur))
-    this._nextBeatTime = firstBeatCtx + nextN * beatDur
+    this._nextBeatTime = this._startTime + nextN * beatDur
 
     // Advance past any floating-point edge where we're still exactly on currentTime
     while (this._nextBeatTime <= this._ctx.currentTime) {
@@ -352,28 +505,13 @@ class AudioEngine {
   // ── Click synthesis ────────────────────────────────────────────────────────
 
   /**
-   * Schedule a click at `time` (AudioContext absolute time).
-   * Uses a triangle oscillator: cleaner attack than sine, less harsh than square.
-   * Connects to _metroGain, which is independent of _songGain — no crosstalk.
+   * Schedule one beat at `time` (AudioContext absolute time) using the chosen
+   * voice. Connects to _metroGain, which is independent of _songGain — no
+   * crosstalk between the click and the song.
    */
   _scheduleClick(time) {
     if (time < this._ctx.currentTime - 0.01) return   // skip missed beats
-
-    const osc  = this._ctx.createOscillator()
-    const gain = this._ctx.createGain()
-    osc.connect(gain)
-    gain.connect(this._metroGain)
-
-    osc.type            = 'triangle'
-    osc.frequency.value = 1200
-
-    // Very fast attack (4 ms), sharp exponential decay (55 ms total)
-    gain.gain.setValueAtTime(0,    time)
-    gain.gain.linearRampToValueAtTime(1.0, time + 0.004)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.058)
-
-    osc.start(time)
-    osc.stop(time + 0.065)
+    _renderClick(this._ctx, this._metroGain, time, this.metroSound)
   }
 
   /**
@@ -401,5 +539,109 @@ class AudioEngine {
     this._metroGain.connect(this._ctx.destination)
   }
 }
+
+// ── Metronome voices ─────────────────────────────────────────────────────────
+//
+// Five deliberately different sounds, because "audible over the song" depends
+// entirely on the song: a bright click disappears into busy highs, and a low
+// thump sits under the music instead of fighting it.
+//
+//   click  triangle 1200 Hz  — the original: sharp, cuts through most things
+//   beep   sine 880 Hz       — softer and rounder, easier on long sessions
+//   tick   filtered noise    — very dry, no pitch to clash with the music
+//   block  square 2000 Hz    — woodblock-ish, brightest of the set
+//   thump  sine 150→60 Hz    — a kick you feel rather than hear
+//
+// One shared renderer so the Settings preview and the scheduler cannot drift.
+
+const METRO_SOUNDS = ['click', 'beep', 'tick', 'block', 'thump']
+
+let _previewCtx = null              // lazy context for Settings previews
+let _previewIdle = null             // timer that suspends it when idle
+const _noiseCache = new WeakMap()   // one noise buffer per AudioContext
+
+/** 120 ms of white noise, reused for every `tick`. */
+function _noise(ctx) {
+  let buf = _noiseCache.get(ctx)
+  if (buf) return buf
+  const len  = Math.floor(ctx.sampleRate * 0.12)
+  buf = ctx.createBuffer(1, len, ctx.sampleRate)
+  const data = buf.getChannelData(0)
+  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1
+  _noiseCache.set(ctx, buf)
+  return buf
+}
+
+/**
+ * Render one metronome hit into `dest` at `time`.
+ * @param {AudioContext} ctx
+ * @param {AudioNode}    dest
+ * @param {number}       time  absolute ctx time
+ * @param {string}       sound one of METRO_SOUNDS
+ */
+function _renderClick(ctx, dest, time, sound) {
+  const gain = ctx.createGain()
+  gain.connect(dest)
+
+  if (sound === 'tick') {
+    // Noise through a high-pass: a dry transient with no pitch of its own
+    const src = ctx.createBufferSource()
+    src.buffer = _noise(ctx)
+    const hp = ctx.createBiquadFilter()
+    hp.type = 'highpass'
+    hp.frequency.value = 2500
+    src.connect(hp)
+    hp.connect(gain)
+
+    gain.gain.setValueAtTime(0, time)
+    gain.gain.linearRampToValueAtTime(0.9, time + 0.002)
+    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.03)
+
+    src.start(time)
+    src.stop(time + 0.04)
+    return
+  }
+
+  const osc = ctx.createOscillator()
+  osc.connect(gain)
+
+  let peak = 1.0
+  let tail = 0.06
+
+  switch (sound) {
+    case 'beep':
+      osc.type = 'sine'
+      osc.frequency.value = 880
+      tail = 0.09
+      break
+    case 'block':
+      osc.type = 'square'
+      osc.frequency.value = 2000
+      peak = 0.55            // square waves are much louder for the same peak
+      tail = 0.035
+      break
+    case 'thump':
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(150, time)
+      osc.frequency.exponentialRampToValueAtTime(60, time + 0.08)
+      tail = 0.11
+      break
+    default:                 // 'click'
+      osc.type = 'triangle'
+      osc.frequency.value = 1200
+      tail = 0.058
+  }
+
+  // Very fast attack, sharp exponential decay: the attack is what you hear as
+  // "the beat", so it has to be immediate at any tempo
+  gain.gain.setValueAtTime(0, time)
+  gain.gain.linearRampToValueAtTime(peak, time + 0.004)
+  gain.gain.exponentialRampToValueAtTime(0.001, time + tail)
+
+  osc.start(time)
+  osc.stop(time + tail + 0.01)
+}
+
+AudioEngine.METRO_SOUNDS = METRO_SOUNDS
 
 window.AudioEngine = AudioEngine

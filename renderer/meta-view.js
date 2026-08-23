@@ -6,10 +6,12 @@
  *
  * The user can:
  *   • edit title / artist (empty is fine — fill in later in the editor)
- *   • pick a local image as cover, or remove the cover entirely
+ *   • pick a local image as cover, drop one on the cover thumbnail, or
+ *     remove the cover entirely
  *   • go back to the BPM view, or create the map with these values
  *
- * Depends on: i18n.js (t), preload api (selectCover, createMap, fileUrl)
+ * Depends on: i18n.js (t), preload api (selectCover, coverFromDrop, createMap,
+ * fileUrl)
  */
 
 const MetaView = (() => {
@@ -44,12 +46,12 @@ const MetaView = (() => {
     }
   }
 
-  function _setBusy(busy) {
+  function _setBusy(busy, keepLabel = false) {
     const create = $('meta-create-btn')
     const back   = $('meta-back-btn')
     if (create) {
       create.disabled = busy
-      create.textContent = busy ? t('bpm.creating') : t('meta.create')
+      if (!keepLabel || !busy) create.textContent = busy ? t('bpm.creating') : t('meta.create')
     }
     if (back) back.disabled = busy
     ;['meta-title', 'meta-artist', 'meta-cover-change', 'meta-cover-remove']
@@ -58,6 +60,84 @@ const MetaView = (() => {
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
+
+  // ── Drag & drop a cover ────────────────────────────────────────────────────
+  //
+  // The cover thumbnail itself is the drop target, and it lights up while a
+  // drag is over it. Files and images dragged straight out of a browser
+  // (http / data URLs) both work.
+
+  /** True when the drag carries something that could be an image. */
+  function _canAccept(dt) {
+    const types = Array.from(dt?.types || [])
+    return types.includes('Files') || types.includes('text/uri-list')
+  }
+
+  /** The dropped payload as a path or URL string, or null if unusable. */
+  function _dropSource(dt) {
+    const file = dt?.files?.[0]
+    if (file) return file.path || null          // Electron exposes the real path
+
+    const raw = (dt?.getData('text/uri-list') || dt?.getData('text/plain') || '').trim()
+    const first = raw.split(/[\r\n]+/).find(l => l && !l.startsWith('#'))
+    return /^(https?:|file:|data:image\/)/i.test(first || '') ? first : null
+  }
+
+  function _setDragOver(on) {
+    $('meta-cover-box')?.classList.toggle('drag-over', on)
+  }
+
+  async function _useDroppedCover(src) {
+    const statusEl = $('meta-status')
+    _setBusy(true, true)          // lock the buttons, keep their labels
+    if (statusEl) statusEl.textContent = t('meta.cover.loading')
+
+    const processed = await window.api.coverFromDrop(src)
+
+    if (processed) _coverPath = processed
+    _setBusy(false)                              // also re-renders the cover
+    if (statusEl) statusEl.textContent = processed ? '' : t('meta.cover.error')
+  }
+
+  function _initDropZone() {
+    const box = $('meta-cover-box')
+    if (!box) return
+
+    box.addEventListener('dragenter', (e) => {
+      if (!_canAccept(e.dataTransfer)) return
+      e.preventDefault()
+      _setDragOver(true)
+    })
+
+    box.addEventListener('dragover', (e) => {
+      if (!_canAccept(e.dataTransfer)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      _setDragOver(true)
+    })
+
+    box.addEventListener('dragleave', (e) => {
+      // Moving between the box's own children is not leaving it
+      if (!box.contains(e.relatedTarget)) _setDragOver(false)
+    })
+
+    box.addEventListener('drop', async (e) => {
+      if (!_canAccept(e.dataTransfer)) return
+      e.preventDefault()
+      _setDragOver(false)
+
+      // Ignore drops while phase 2 is already building the map
+      if ($('meta-create-btn')?.disabled) return
+
+      const src = _dropSource(e.dataTransfer)
+      if (!src) {
+        const statusEl = $('meta-status')
+        if (statusEl) statusEl.textContent = t('meta.cover.error')
+        return
+      }
+      await _useDroppedCover(src)
+    })
+  }
 
   async function _changeCover() {
     const chosen = await window.api.selectCover()
@@ -103,6 +183,8 @@ const MetaView = (() => {
     _onCreated = onCreated
     _onBack    = onBack
 
+    _initDropZone()
+
     $('meta-cover-change')?.addEventListener('click', _changeCover)
     $('meta-cover-remove')?.addEventListener('click', _removeCover)
     $('meta-create-btn')  ?.addEventListener('click', _create)
@@ -129,10 +211,27 @@ const MetaView = (() => {
    * @param {object}  data.payload   Everything song:create-map needs (minus meta)
    * @param {object}  data.meta      Best-guess { title, artist } to prefill
    * @param {?string} data.coverPath Fetched cover (may be null)
+   * @param {string}  [data.source]  Where the metadata came from:
+   *                                 'tags'       = the file's own tags (only the
+   *                                                cover is missing)
+   *                                 'tags-dupes' = tags with a repeated value
+   *                                                that could not be confirmed
+   *                                 anything else = not identified
    */
-  function show({ payload, meta, coverPath }) {
+  function show({ payload, meta, coverPath, source }) {
     _payload   = payload
     _coverPath = coverPath || null
+
+    // The subtitle explains why we are asking. When the file was properly
+    // tagged there is nothing to second-guess — only artwork is missing.
+    const subEl = document.querySelector('#view-meta .meta-subtitle')
+    if (subEl) {
+      const key = source === 'tags'       ? 'meta.subtitle_cover'
+                : source === 'tags-dupes' ? 'meta.subtitle_dupes'
+                :                           'meta.subtitle'
+      subEl.setAttribute('data-i18n', key)   // keeps working on language change
+      subEl.textContent = t(key)
+    }
 
     const titleEl  = $('meta-title')
     const artistEl = $('meta-artist')
@@ -142,6 +241,7 @@ const MetaView = (() => {
     const statusEl = $('meta-status')
     if (statusEl) statusEl.textContent = ''
 
+    _setDragOver(false)
     _renderCover()
     _setBusy(false)
     titleEl?.focus()

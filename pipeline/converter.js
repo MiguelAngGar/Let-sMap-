@@ -20,6 +20,18 @@ function clampQuality(q) {
   return Math.min(10, Math.max(0, n))
 }
 
+// Bitrate window used when following a lossy source (kbps).
+// The floor is 96 rather than the source's own bitrate because libvorbis treats
+// -b:a as a loose average and lands roughly 30% under the target: asking for
+// 64k on a poor YouTube rip produced ~45 kbps of actual audio, which is audible
+// in the map. Above ~500 kbps there is nothing left to gain.
+const MIN_MATCH_KBPS = 96
+const MAX_MATCH_KBPS = 500
+
+// Nominal bitrate of each libvorbis quality step, q0 … q10 (kbps). Used to put
+// the chosen quality and the source's bitrate on the same scale.
+const VORBIS_KBPS = [64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 500]
+
 // Codecs that are already lossy: matching their bitrate keeps size/quality
 // roughly identical. Anything not listed here (flac, alac, pcm_*, wavpack,
 // truehd…) is treated as lossless, where "match bitrate" is meaningless.
@@ -29,43 +41,92 @@ const LOSSY_CODECS = new Set([
 ])
 
 /**
+ * Parse ffmpeg's banner for the first audio stream's codec, sample rate and
+ * bitrate. Exported for testing.
+ *
+ *   Input #0, mp3, from 'song.mp3':
+ *     Duration: 00:03:41.52, start: 0.025056, bitrate: 321 kb/s
+ *     Stream #0:0: Audio: mp3, 44100 Hz, stereo, fltp, 320 kb/s
+ *
+ * The stream bitrate is preferred; the container one (which includes tag and
+ * container overhead) is the fallback, matching the old ffprobe logic.
+ */
+function parseProbe(text) {
+  const out = { sampleRate: 44100, codec: null, bitRate: 0 }
+  if (!text) return out
+
+  const line = (/Stream #\d+:\d+[^\n]*: Audio: [^\n]*/.exec(text) || [''])[0]
+  if (line) {
+    const codec = /: Audio: ([A-Za-z0-9_.\-]+)/.exec(line)
+    if (codec) out.codec = codec[1].toLowerCase()
+
+    const sr = /(\d+(?:\.\d+)?)\s*(k)?Hz/.exec(line)
+    if (sr) {
+      const hz = Math.round(parseFloat(sr[1]) * (sr[2] ? 1000 : 1))
+      if (hz > 0) out.sampleRate = hz
+    }
+
+    const br = /(\d+(?:\.\d+)?)\s*kb\/s/.exec(line)
+    if (br) out.bitRate = Math.round(parseFloat(br[1]) * 1000)
+  }
+
+  if (!out.bitRate) {
+    const fb = /Duration:[^\n]*?bitrate:\s*(\d+(?:\.\d+)?)\s*kb\/s/.exec(text)
+    if (fb) out.bitRate = Math.round(parseFloat(fb[1]) * 1000)
+  }
+
+  return out
+}
+
+/**
  * Probe a file's audio stream. Returns sample rate, codec and bitrate (bps).
- * Bitrate prefers the stream value, falling back to the container/format value.
- * All fields fall back to safe defaults if probing fails.
+ *
+ * Read from ffmpeg's own banner instead of ffprobe: only the ffmpeg binary is
+ * bundled (ffmpeg-static), so `ffprobe` was missing on most machines, failed
+ * silently and returned the defaults below — which quietly disabled "keep
+ * original file quality" and exported everything at q10. ffmpeg with no output
+ * file prints the stream info and exits non-zero; that is the whole probe.
+ *
+ * All fields fall back to safe defaults if the banner cannot be parsed.
  */
 function probeAudio(inputPath) {
   return new Promise((resolve) => {
-    ffmpeg.ffprobe(inputPath, (err, data) => {
-      if (err || !data) return resolve({ sampleRate: 44100, codec: null, bitRate: 0 })
-      const stream = (data.streams || []).find(s => s.codec_type === 'audio') || {}
-      const sr = parseInt(stream.sample_rate, 10)
-      const streamBr = parseInt(stream.bit_rate, 10)
-      const fmtBr = data.format && parseInt(data.format.bit_rate, 10)
-      const bitRate = Number.isFinite(streamBr) && streamBr > 0 ? streamBr
-                    : Number.isFinite(fmtBr)    && fmtBr    > 0 ? fmtBr
-                    : 0
-      resolve({
-        sampleRate: Number.isFinite(sr) && sr > 0 ? sr : 44100,
-        codec:      stream.codec_name || null,
-        bitRate
+    execFile(resolvedFfmpegPath, ['-hide_banner', '-i', inputPath],
+      { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, windowsHide: true },
+      (_err, _stdout, stderr) => {
+        const info = parseProbe(stderr || '')
+        if (!info.codec) console.warn('[converter] probe found no audio stream in', inputPath)
+        resolve(info)
       })
-    })
   })
 }
 
 // ── Cold end (ScoreSaber outro rule) ─────────────────────────────────────────
 // "A map must have an outro period of more than 2 seconds" — if the source
 // audio ends abruptly, the mapper cannot satisfy it. Exports therefore
-// guarantee ≥ COLD_END_SECONDS of trailing silence, adding only the missing
-// difference (never "excessive silence").
+// guarantee at least this much trailing silence, adding only the missing
+// difference (never "excessive silence"). The default matches the criteria;
+// Settings can raise or lower it, and the UI warns when it goes below.
 const COLD_END_SECONDS = 2.0
+const MAX_SILENCE_SECONDS = 15.0   // the criteria cap the outro at 15 s
+
+/** Keep a configured silence target inside sane bounds. */
+function clampSilence(value, fallback) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) return fallback
+  return Math.min(MAX_SILENCE_SECONDS, Math.round(n * 1000) / 1000)
+}
 
 /**
  * Measure how much trailing silence the file already has (seconds).
- * Decodes the last ~12 s to mono PCM and scans 20 ms RMS windows against a
- * −45 dBFS threshold. Resolves 0 on any decode problem (⇒ full pad, safe).
+ * Decodes the last `lookback` seconds to mono PCM and scans 20 ms RMS windows
+ * against a −45 dBFS threshold. Resolves 0 on any decode problem (⇒ full pad).
+ *
+ * The window has to be wider than the criteria's outro ceiling (15 s), or a
+ * song that ends with 20 s of silence would look like it ends with 12 and we
+ * could never tell the user their outro is too long to be ranked.
  */
-function measureTrailingSilence(inputPath, lookback = 12) {
+function measureTrailingSilence(inputPath, lookback = 20) {
   return new Promise((resolve) => {
     execFile(resolvedFfmpegPath, [
       '-v', 'error', '-sseof', String(-lookback), '-i', inputPath,
@@ -91,10 +152,15 @@ function measureTrailingSilence(inputPath, lookback = 12) {
   })
 }
 
-/** Seconds of silence to append so the export ends with ≥ COLD_END_SECONDS. */
-async function coldEndPad(inputPath) {
+/**
+ * Seconds of silence to append so the export ends with at least `target`.
+ * Silence the file already has counts towards it, so a song that fades out
+ * gets nothing added.
+ */
+async function coldEndPad(inputPath, target = COLD_END_SECONDS) {
+  const wanted = clampSilence(target, COLD_END_SECONDS)
   const trailing = await measureTrailingSilence(inputPath)
-  const pad = Math.max(0, COLD_END_SECONDS - trailing)
+  const pad = Math.max(0, wanted - trailing)
   return pad > 0.01 ? pad : 0
 }
 
@@ -128,24 +194,31 @@ function toOgg(inputPath) {
  */
 async function addSilence(audioPath, seconds, opts = {}) {
   // Fallback path: input is the phase-1 ogg (already 44100 Hz). There is no
-  // original source to match here, so just honour the quality target.
+  // original source to follow here, so just honour the quality target.
   const q = clampQuality(opts.quality ?? 10)
-  const tailPad = await coldEndPad(audioPath)
+  const pad = Number(seconds) > 0.001 ? Number(seconds) : 0
+  const tailPad = await coldEndPad(audioPath, opts.coldEnd)
   return new Promise((resolve, reject) => {
     const out = path.join(TMP_DIR, `${Date.now()}_padded.ogg`)
-    const filters = [
-      '[1:a]aresample=44100,aformat=channel_layouts=stereo[src]',
-      '[0:a][src]concat=n=2:v=0:a=1[out]'
-    ]
+    const cmd = ffmpeg()
+    const filters = []
+
+    if (pad > 0) {
+      cmd.input(`aevalsrc=0|0:d=${pad.toFixed(6)}:s=44100`).inputOptions(['-f', 'lavfi'])
+      cmd.input(audioPath)
+      filters.push('[1:a]aresample=44100,aformat=channel_layouts=stereo[src]')
+      filters.push('[0:a][src]concat=n=2:v=0:a=1[out]')
+    } else {
+      cmd.input(audioPath)
+      filters.push('[0:a]aresample=44100,aformat=channel_layouts=stereo[out]')
+    }
+
     let outLabel = '[out]'
     if (tailPad > 0) {
       filters.push(`[out]apad=pad_dur=${tailPad.toFixed(3)}[fin]`)
       outLabel = '[fin]'
     }
-    ffmpeg()
-      .input(`aevalsrc=0|0:d=${seconds.toFixed(6)}:s=44100`)
-      .inputOptions(['-f', 'lavfi'])
-      .input(audioPath)
+    cmd
       .complexFilter(filters)
       .outputOptions(['-map', outLabel, '-c:a', 'libvorbis', '-q:a', String(q)])
       .output(out)
@@ -159,62 +232,108 @@ async function addSilence(audioPath, seconds, opts = {}) {
 }
 
 /**
+ * Choose the encoder settings for the exported song.ogg.
+ *
+ * The quality picked in Settings is a CEILING, not a target:
+ *
+ *   • A lossless source (WAV/FLAC/PCM) has no bitrate worth following, so it is
+ *     encoded at that quality.
+ *   • A lossy source better than the chosen quality is encoded at that quality
+ *     too — there is no point storing more than the user asked for.
+ *   • A lossy source ALREADY WORSE than the chosen quality keeps its own
+ *     bitrate. Re-encoding a 96 kbps rip at q8 cannot invent the detail that
+ *     was thrown away; it only triples the file size.
+ *
+ * @returns {{ encodeOpts: string[], reason: string }}
+ */
+function encoderArgs({ quality, codec, bitRate, sampleRate }) {
+  const q      = clampQuality(quality)
+  const target = VORBIS_KBPS[q]
+  const source = bitRate > 0 ? Math.round(bitRate / 1000) : 0
+  const rate   = ['-ar', String(sampleRate)]
+
+  if (LOSSY_CODECS.has(codec) && source > 0 && source < target) {
+    // Never below the floor, never above the ceiling the user chose
+    let kbps = Math.max(MIN_MATCH_KBPS, source)
+    kbps = Math.min(kbps, target, MAX_MATCH_KBPS)
+    return {
+      encodeOpts: ['-c:a', 'libvorbis', '-b:a', `${kbps}k`, ...rate],
+      reason: `source ${source}kbps is under q${q} (~${target}kbps), following the source`
+    }
+  }
+
+  return {
+    encodeOpts: ['-c:a', 'libvorbis', '-q:a', String(q), ...rate],
+    reason: source > 0
+      ? `source ${source}kbps is at or above q${q} (~${target}kbps), capping at q${q}`
+      : `no bitrate to follow, using q${q}`
+  }
+}
+
+/**
  * Prepend `seconds` of silence to the ORIGINAL (lossless/source) file and
  * encode to .ogg in a single pass. Avoids the double-lossy generation of
  * toOgg() → addSilence() (two vorbis encodes).
  *
+ * `seconds` may legitimately be 0: a song that already opens with enough
+ * silence before its first beat needs none added (see phase2.calcSilencePad),
+ * and in that case the silence branch is left out of the filter graph entirely.
+ *
  * @param {string} inputPath
- * @param {number} seconds                Silence to prepend.
+ * @param {number} seconds            Silence to prepend (0 = none).
  * @param {object} [opts]
- * @param {number}  [opts.quality=10]     Vorbis VBR quality 0–10 (used when NOT matching).
- * @param {boolean} [opts.matchSource=true]
- *        When true and the source is a LOSSY file with a known bitrate, the
- *        output is encoded at ~that same bitrate (constant-bitrate ABR), so the
- *        exported song.ogg stays about the same size/quality as the upload
- *        instead of ballooning at q10. For lossless sources (WAV/FLAC/PCM) or an
- *        unknown bitrate there is nothing to match, so it uses `quality`.
+ * @param {number} [opts.quality=10]  Vorbis quality CEILING 0–10. A source
+ *        already poorer than this keeps its own bitrate instead of being
+ *        re-encoded larger for nothing — see encoderArgs above.
+ * @param {number} [opts.coldEnd=2]   Trailing silence the export must end up
+ *        with (seconds). Only the missing amount is appended.
  *
  * The native sample rate is always probed and preserved (a 48 kHz upload is not
- * downsampled to 44100), and the prepended silence is generated at that same
+ * downsampled to 44100), and any prepended silence is generated at that same
  * rate so the concat stays sample-accurate.
  */
 async function padToOgg(inputPath, seconds, opts = {}) {
-  const { quality = 10, matchSource = true } = opts
-  const q = clampQuality(quality)
-  const tailPad = await coldEndPad(inputPath)
+  const q = clampQuality(opts.quality ?? 10)
+  const pad = Number(seconds) > 0.001 ? Number(seconds) : 0
+  const tailPad = await coldEndPad(inputPath, opts.coldEnd)
+
   return new Promise((resolve, reject) => {
     probeAudio(inputPath).then(({ sampleRate: sr, codec, bitRate }) => {
       const out = path.join(TMP_DIR, `${Date.now()}_final.ogg`)
 
-      // Decide the encoder args: match the source bitrate, or use a quality target.
-      let encodeOpts
-      if (matchSource && LOSSY_CODECS.has(codec) && bitRate > 0) {
-        // Clamp to a sane Vorbis range (kbps): below ~64 sounds bad, above ~500
-        // is pointless. Round to nearest kbps.
-        const kbps = Math.min(500, Math.max(64, Math.round(bitRate / 1000)))
-        encodeOpts = ['-c:a', 'libvorbis', '-b:a', `${kbps}k`, '-ar', String(sr)]
-      } else {
-        encodeOpts = ['-c:a', 'libvorbis', '-q:a', String(q), '-ar', String(sr)]
-      }
+      const { encodeOpts, reason } = encoderArgs({ quality: q, codec, bitRate, sampleRate: sr })
 
-      const filters = [
-        // Match silence branch to the source rate/layout so concat can't resample or downmix
-        `[1:a]aresample=${sr},aformat=channel_layouts=stereo[src]`,
-        '[0:a][src]concat=n=2:v=0:a=1[out]'
-      ]
-      let outLabel = '[out]'
+      console.log(`[converter] source ${codec || '?'} ${Math.round(bitRate / 1000)}kbps ${sr}Hz → ` +
+                  `${encodeOpts.join(' ')}  (${reason})`)
+      console.log(`[converter] lead-in ${pad.toFixed(3)}s, cold end +${tailPad.toFixed(3)}s`)
+
+      const cmd = ffmpeg()
+      const filters = []
+      let label
+
+      if (pad > 0) {
+        cmd.input(`aevalsrc=0|0:d=${pad.toFixed(6)}:s=${sr}`).inputOptions(['-f', 'lavfi'])
+        cmd.input(inputPath)
+        // Match the silence branch to the source rate/layout so concat cannot
+        // resample or downmix
+        filters.push(`[1:a]aresample=${sr},aformat=channel_layouts=stereo[src]`)
+        filters.push('[0:a][src]concat=n=2:v=0:a=1[out]')
+      } else {
+        cmd.input(inputPath)
+        // Nothing to prepend: still route the audio through the graph so the
+        // output is audio-only (a source can carry embedded cover art)
+        filters.push(`[0:a]aresample=${sr},aformat=channel_layouts=stereo[out]`)
+      }
+      label = '[out]'
+
       if (tailPad > 0) {
         // Cold end: top the outro up to ≥2 s of silence (ScoreSaber outro rule)
-        filters.push(`[out]apad=pad_dur=${tailPad.toFixed(3)}[fin]`)
-        outLabel = '[fin]'
+        filters.push(`${label}apad=pad_dur=${tailPad.toFixed(3)}[fin]`)
+        label = '[fin]'
       }
 
-      ffmpeg()
-        .input(`aevalsrc=0|0:d=${seconds.toFixed(6)}:s=${sr}`)
-        .inputOptions(['-f', 'lavfi'])
-        .input(inputPath)
-        .complexFilter(filters)
-        .outputOptions(['-map', outLabel, ...encodeOpts])
+      cmd.complexFilter(filters)
+        .outputOptions(['-map', label, ...encodeOpts])
         .output(out)
         .on('end',   () => resolve(out))
         .on('error', (err) => {
@@ -226,4 +345,8 @@ async function padToOgg(inputPath, seconds, opts = {}) {
   })
 }
 
-module.exports = { toOgg, addSilence, padToOgg }
+module.exports = {
+  toOgg, addSilence, padToOgg, probeAudio, parseProbe, encoderArgs,
+  coldEndPad, clampSilence, measureTrailingSilence,
+  COLD_END_SECONDS, MAX_SILENCE_SECONDS
+}

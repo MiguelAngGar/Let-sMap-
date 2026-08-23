@@ -8,12 +8,16 @@ Let'sMap! is a desktop app (Electron) with a built-in, pure-JavaScript audio ana
 
 - **Fast, sample-accurate BPM detection** — implements the tempo estimation algorithm from Bram van de Wetering's paper *"Non-causal Beat Tracking for Rhythm Games"* (the approach popularised by rhythm-game chart editors), measuring the beat period at sample resolution. Typical accuracy is within ±0.01 BPM on fixed-tempo music, with exact integer snapping.
 - **Downbeat & offset estimation** with grid-aligned silence padding.
-- **Ranking-criteria-friendly audio**: exported songs get an intro of ≥ 1.5 s of silence before the first musical beat (ScoreSaber hot-start rule) and a topped-up outro so at least 2 s of silence follow the music (cold-end rule) — only the missing amount is ever added.
-- **Interactive BPM validation view** — waveform timeline (including the silence that will be prepended), sample-accurate metronome preview, BPM candidates, half-beat shift and BPM doubling modifiers, custom BPM input.
+- **Ranking-criteria-friendly audio**: exported songs end up with at least 1.5 s of silence before the first musical beat (ScoreSaber hot-start rule) and 2 s after the music (cold-end rule) — both configurable in Settings, with a warning when a value would make the map unrankable. **Only the missing amount is ever added, at either end**: silence the song already carries counts towards both, so a track that opens with a long intro is padded by the beat-grid alignment alone — often by nothing at all.
+- **Interactive BPM validation view** — sample-accurate metronome preview (five selectable voices), BPM candidates, half-beat shift and BPM doubling modifiers, custom BPM input.
+- **Waveform you can actually work on** — zoom from the whole song down to a quarter of a second (~0.3 ms per pixel), pan with the scrollbar, the wheel, two fingers or Alt-drag, pinch to zoom on a trackpad. It draws the map's beat grid (bar lines every four), shades the silence that will be prepended, marks where the audio starts, and reads out the time under the cursor to the millisecond. Dragging places the playhead at any zoom level, scrolling the view when you reach the edge.
+- **Lead-in you control**: ± whole beats per song, so beat 1 always stays on a grid line, plus a **fine offset in milliseconds** that starts from the value the app worked out for the grid and can be corrected by ear against the metronome (with a one-click restore).
 - **Beat Saber install auto-detection** (Windows, Steam & Oculus) — the export folder points at `Beat Saber_Data\CustomWIPLevels` automatically until you pick a folder yourself. A re-detect button lives in Settings.
-- **Metadata + cover art lookup**, with a confirmation screen when confidence is low.
-- **Audio conversion to OGG** via bundled ffmpeg, matching the source bitrate by default.
-- Configurable export folder, mapper name, OGG quality, volumes, and language (EN/ES/FR/DE/PT).
+- **Metadata from the file first**: embedded tags (ID3 / Vorbis / MP4) and embedded cover art are used as-is. A tag that says nothing ("unknow", "Track 03") counts as an empty field, and a value stored twice ("Dimrain47;Dimrain47") is verified before it is trusted. Online steps only run when the file itself does not settle the question, and only a high-confidence answer is accepted — otherwise a confirmation screen opens, prefilled with the best the file can offer (its tags, the cleaned-up filename, its embedded cover). Cover art fetched online is discarded unless it belongs to the same song. You can drop an image on the cover thumbnail there — a file, or one dragged straight out of a browser.
+- **Works offline**: every online step is optional. With no connection the app reads the file's own tags, duration and embedded artwork, cleans up the filename, and asks you to confirm the rest. The first failed request marks the network as down so the remaining steps skip instantly instead of waiting out timeouts.
+- **Audio conversion to OGG** via bundled ffmpeg. The quality setting is a ceiling: a source that is already poorer keeps its own bitrate rather than being re-encoded bigger for nothing, and the source's sample rate is preserved.
+- **Configurable target silence** for the intro and the outro, separately — the starting point every song gets. Defaults are the ScoreSaber numbers (1.5 s / 2 s), and Settings says when a value falls short of them. Beat-grid alignment is worked out on top, and the intro can be nudged beat by beat per song in the BPM view.
+- Configurable export folder, mapper name, maximum OGG quality, target silence, volumes, metronome sound, and language (EN/ES/FR/DE/PT).
 
 ## Supported audio formats
 
@@ -45,7 +49,7 @@ Switch temporarily without editing code:
 $env:LETSMAP_ENGINE="madmom"; npm run dev
 ```
 
-The JS engine's onset detector was ported using [AudioSync](https://github.com/Caeden117/AudioSync) (MIT, © Caeden Statia) as reference — see `pipeline/av-engine/THIRD-PARTY-NOTICES.md`.
+The JS engine's onset detector was ported using [AudioSync](https://github.com/Caeden117/AudioSync) (MIT, © Caeden117) as reference — see `pipeline/av-engine/THIRD-PARTY-NOTICES.md`.
 
 ## Development
 
@@ -107,7 +111,12 @@ Builds the arm64 `.dmg` and (with the GitHub CLI authenticated) publishes it to 
 ```
 electron/     Main process, preload, IPC, Beat Saber install auto-detection
 renderer/     UI (HTML/CSS/JS, i18n, waveform + metronome preview)
-pipeline/     Node orchestration: analyze → convert → metadata → cover → output
+pipeline/     Node orchestration: analyze → convert → tags/metadata → cover → output
+  text.js     Normalised text comparison shared by the metadata steps
+  net.js      Circuit breaker: one failed request and the online steps stand down
+  tags.js     Embedded tags, duration and cover art, read with ffmpeg alone
+  meta-prefetch.js  Resolves the metadata during the analysis, so pressing
+                    "Create Map" waits for nothing
   av-engine/  Default BPM+offset engine (pure JS, worker thread)
 python/       Legacy analysis engine (analyze.py, madmom) + PyInstaller spec
 build/        App icons
@@ -116,8 +125,9 @@ build/        App icons
 ## Acknowledgements
 
 - Bram van de Wetering — *Non-causal Beat Tracking for Rhythm Games* (the tempo detection algorithm).
-- [AudioSync](https://github.com/Caeden117/AudioSync) by Caeden Statia (MIT) — reference for the onset detection port.
+- [AudioSync](https://github.com/Caeden117/AudioSync) by Caeden117 (MIT) — reference for the onset detection port.
 - [madmom](https://github.com/CPJKU/madmom) — the legacy engine's beat tracking.
+- **galaxymaster** (Discord) — for testing the app on real maps and for the feedback that drove most of v0.4.0: the metadata rules, the silence handling, and the whole waveform rework.
 
 ## License
 

@@ -20,7 +20,7 @@ Pipeline:
   7. Confidence = function of r-value AND median residual / period.
   8. Downbeat phase via beat-activation strength on every k-th beat.
   9. First-onset detection (RNNOnsetProcessor) for lead-in calculation.
- 10. Silence pad → ceil((onset + 1.5 s) / period) * period.
+ 10. Silence pad → ceil(max(onset, 1.5 s) / period) * period - onset.
 
 v7 PRECISION UPGRADES (ArrowVortex-class):
   A. Sub-frame beat refinement — DBN beats are quantised to the 10 ms
@@ -111,15 +111,18 @@ def load_signal(audio_path):
 # ── Silence padding ───────────────────────────────────────────────────────────
 
 def calc_silence_pad(anchor_time, bpm):
-    """Smallest pad that aligns anchor to a beat boundary AND gives ≥1.5 s lead-in."""
+    """Smallest pad that puts the anchor on a beat boundary at least MIN_LEAD_IN in.
+
+    MIN_LEAD_IN is what the padded audio must END UP with, not an amount to add:
+    silence the song already has before its first beat counts towards it, so a
+    long intro gets little or no padding (pad can be 0).
+    """
     beat_dur     = 60.0 / bpm
-    n            = math.ceil((anchor_time + MIN_LEAD_IN) / beat_dur)
+    eps          = 1e-6
+    earliest     = max(anchor_time, MIN_LEAD_IN)
+    n            = math.ceil((earliest - eps) / beat_dur)
     total_offset = n * beat_dur
-    silence_pad  = total_offset - anchor_time
-    if silence_pad < MIN_LEAD_IN:
-        n           += 1
-        total_offset = n * beat_dur
-        silence_pad  = total_offset - anchor_time
+    silence_pad  = max(0.0, total_offset - anchor_time)
     return round(silence_pad, 6), round(total_offset, 6)
 
 

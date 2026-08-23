@@ -46,7 +46,22 @@
 
     <!-- ── 1. Waveform timeline ─────────────────────────────────────────── -->
     <div class="timeline-wrapper">
-      <canvas id="waveform-canvas" aria-label="Song waveform — click or drag to seek"></canvas>
+      <canvas id="waveform-canvas"
+              aria-label="Song waveform — click or drag to seek, scroll to zoom"></canvas>
+      <div id="wave-scroll" class="wave-scroll hidden" data-i18n-title="wave.scroll">
+        <div id="wave-scroll-thumb" class="wave-scroll-thumb"></div>
+      </div>
+      <div class="wave-tools">
+        <button type="button" id="wave-help" class="wave-tool wave-help"
+                data-i18n-title="wave.help">?</button>
+        <button type="button" id="wave-zoom-out" class="wave-tool"
+                data-i18n-title="wave.zoom_out">−</button>
+        <span id="wave-zoom-level" class="wave-zoom-level" aria-live="off">×1</span>
+        <button type="button" id="wave-zoom-in" class="wave-tool"
+                data-i18n-title="wave.zoom_in">+</button>
+        <button type="button" id="wave-zoom-fit" class="wave-tool wave-tool-wide"
+                data-i18n="wave.fit" data-i18n-title="wave.fit_title">All</button>
+      </div>
     </div>
 
     <!-- ── 2. Playback row ──────────────────────────────────────────────── -->
@@ -67,23 +82,37 @@
     </div>
 
     <!-- ── 3. Offset info ────────────────────────────────────────────────── -->
-    <div id="offset-info" class="offset-info" aria-live="off"></div>
+    <div class="offset-row">
+      <div id="offset-info" class="offset-info" aria-live="off"></div>
+      <span class="offset-stat">
+        <label class="offset-stat-label" for="nudge-input" data-i18n="offset.nudge">offset</label>
+        <input type="number" id="nudge-input" class="offset-num"
+               step="1" min="-250" max="250" value="0"
+               autocomplete="off" spellcheck="false"
+               data-i18n-title="offset.nudge_title">
+        <span class="offset-unit">ms</span>
+        <button type="button" id="nudge-reset" class="offset-reset"
+                data-i18n-title="offset.nudge_reset">↺</button>
+      </span>
+    </div>
+    <p id="offset-warning" class="offset-warning hidden" aria-live="polite"></p>
+    <p id="offset-nudge-note" class="offset-note hidden" aria-live="polite"></p>
 
     <!-- ── 3b. Volume controls ───────────────────────────────────────────── -->
     <div class="volume-panel">
       <div class="volume-row">
         <span class="volume-label" data-i18n="vol.song">Song</span>
         <input type="range" id="song-volume" class="volume-slider"
-               min="0" max="100" value="75" step="1"
+               min="0" max="100" value="50" step="1"
                aria-label="Song volume (0–100%)">
-        <span id="song-vol-pct" class="volume-pct">75%</span>
+        <span id="song-vol-pct" class="volume-pct">50%</span>
       </div>
       <div class="volume-row">
         <span class="volume-label" data-i18n="vol.metro">Metronome</span>
         <input type="range" id="metro-volume" class="volume-slider"
-               min="0" max="100" value="100" step="1"
+               min="0" max="100" value="80" step="1"
                aria-label="Metronome volume (0–100%)">
-        <span id="metro-vol-pct" class="volume-pct">100%</span>
+        <span id="metro-vol-pct" class="volume-pct">80%</span>
       </div>
     </div>
 
@@ -149,7 +178,7 @@
       <p class="meta-subtitle" data-i18n="meta.subtitle">Couldn't identify this song with confidence. Check the details or fill them in yourself.</p>
 
       <div class="meta-cover-row">
-        <div class="meta-cover-box" aria-hidden="true">
+        <div id="meta-cover-box" class="meta-cover-box" aria-hidden="true">
           <img id="meta-cover-img" class="hidden" alt="">
           <div id="meta-cover-empty" class="meta-cover-empty">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
@@ -165,6 +194,7 @@
                   data-i18n="meta.cover.change">Choose image…</button>
           <button id="meta-cover-remove" class="secondary-btn"
                   data-i18n="meta.cover.remove">Remove</button>
+          <p class="meta-cover-hint" data-i18n="meta.cover.drop">or drop an image here</p>
         </div>
       </div>
 
@@ -231,14 +261,7 @@
           <p class="field-hint" data-i18n="settings.mapper_hint">Written into Info.dat as the level author.</p>
         </div>
         <div class="field">
-          <label class="checkbox-row">
-            <input type="checkbox" id="match-quality" checked>
-            <span data-i18n="settings.match_quality">Keep original file quality</span>
-          </label>
-          <p class="field-hint" data-i18n="settings.match_quality_hint">Matches the uploaded file's bitrate so the map audio stays the same size and quality. Turn off to pick a fixed quality below.</p>
-        </div>
-        <div class="field">
-          <label for="ogg-quality" data-i18n="settings.quality">Audio quality (OGG)</label>
+          <label for="ogg-quality" data-i18n="settings.quality">Maximum audio quality (OGG)</label>
           <select id="ogg-quality" class="lang-select">
             <option value="10">10 — Max</option>
             <option value="9">9</option>
@@ -249,7 +272,35 @@
             <option value="4">4</option>
             <option value="3">3</option>
           </select>
-          <p class="field-hint" data-i18n="settings.quality_hint">10 = maximum quality (~500 kbps). Lower it if the file gets too large.</p>
+          <p class="field-hint" data-i18n="settings.quality_hint">A ceiling, not a target: 10 is ~500 kbps. A file that already comes in poorer than this keeps its own bitrate instead of being re-encoded bigger for nothing.</p>
+        </div>
+        <div class="field">
+          <label data-i18n="settings.silence">Target silence (0–15 s)</label>
+          <div class="silence-row">
+            <label class="silence-input">
+              <span data-i18n="settings.silence_intro">Intro</span>
+              <input type="number" id="lead-in-seconds" min="0" max="15" step="0.1" value="1.5"
+                     inputmode="decimal" aria-describedby="silence-note">
+            </label>
+            <label class="silence-input">
+              <span data-i18n="settings.silence_outro">Outro</span>
+              <input type="number" id="cold-end-seconds" min="0" max="15" step="0.1" value="2"
+                     inputmode="decimal" aria-describedby="silence-note">
+            </label>
+          </div>
+          <p class="field-hint" data-i18n="settings.silence_hint">The starting point for every song: only the missing amount is ever added, and beat-grid alignment goes on top separately. The intro can be fine-tuned beat by beat in the BPM view; the outro always applies as set. The ranking criteria ask for 1.5 and 2.</p>
+          <p id="silence-note" class="field-note hidden" aria-live="polite"></p>
+        </div>
+        <div class="field">
+          <label for="metro-sound" data-i18n="settings.metro_sound">Metronome sound</label>
+          <select id="metro-sound" class="lang-select">
+            <option value="click" data-i18n="settings.metro_click">Click</option>
+            <option value="beep"  data-i18n="settings.metro_beep">Beep</option>
+            <option value="tick"  data-i18n="settings.metro_tick">Tick</option>
+            <option value="block" data-i18n="settings.metro_block">Woodblock</option>
+            <option value="thump" data-i18n="settings.metro_thump">Thump</option>
+          </select>
+          <p class="field-hint" data-i18n="settings.metro_hint">Picking one plays it. Whichever cuts through the songs you map is the right choice — the low one sits under the music instead of over it.</p>
         </div>
         <div class="field">
           <label for="lang-select" data-i18n="settings.language">Language</label>

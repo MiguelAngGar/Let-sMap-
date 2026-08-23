@@ -3,8 +3,8 @@ const os   = require('os')
 
 const converter = require('./converter')
 const analyzer  = require('./analyzer')
-const metadata  = require('./metadata')
-const cover     = require('./cover')
+const metaResolve = require('./meta-resolve')
+const cover       = require('./cover')
 const output    = require('./output')
 
 /**
@@ -38,14 +38,17 @@ async function run(inputPath, win, settings = {}) {
   send('silence', `Adding ${analysis.silence_pad.toFixed(3)}s silence…`)
   const paddedPath = await converter.addSilence(oggPath, analysis.silence_pad)
 
-  // 4. Fetch metadata
-  send('metadata', 'Fetching song metadata…')
+  // 4 + 5. Metadata + cover: the file's own tags first, online lookup only
+  // when the file has nothing usable.
   const songName = path.basename(inputPath, path.extname(inputPath))
-  const meta = await metadata.fetch(songName)
-
-  // 5. Fetch + resize cover
-  send('cover', 'Fetching cover image…')
-  const coverPath = await cover.fetch(meta.artist, meta.title)
+  const resolved = await metaResolve.resolve({
+    filePath:     inputPath,
+    originalName: songName,
+    send
+  })
+  const meta      = resolved.meta
+  // No confirmation screen on this path, so never end up with no artwork.
+  const coverPath = resolved.coverPath || await cover.placeholder()
 
   // 6. Write Beat Saber folder
   send('output', 'Generating Beat Saber folder…')

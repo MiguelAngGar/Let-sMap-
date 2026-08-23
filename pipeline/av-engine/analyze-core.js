@@ -19,17 +19,18 @@ const SAMPLE_RATE = 44100
 const MIN_LEAD_IN = 1.5
 
 // ── Silence padding (same maths as analyze.py / phase2.calcSilencePad) ───────
+//
+// MIN_LEAD_IN is the lead-in the padded audio must END UP with, not an amount to
+// add: silence the song already carries before its first beat counts towards it,
+// so a track with a long intro gets little or no padding.
 
 function calcSilencePad(anchorTime, bpm) {
   const beatDur = 60.0 / bpm
-  let n = Math.ceil((anchorTime + MIN_LEAD_IN) / beatDur)
-  let totalOffset = n * beatDur
-  let silencePad = totalOffset - anchorTime
-  if (silencePad < MIN_LEAD_IN) {
-    n += 1
-    totalOffset = n * beatDur
-    silencePad = totalOffset - anchorTime
-  }
+  const EPS = 1e-6
+  const earliest = Math.max(anchorTime, MIN_LEAD_IN)
+  const n = Math.ceil((earliest - EPS) / beatDur)
+  const totalOffset = n * beatDur
+  const silencePad = Math.max(0, totalOffset - anchorTime)
   return {
     silencePad: Math.round(silencePad * 1e6) / 1e6,
     totalOffset: Math.round(totalOffset * 1e6) / 1e6

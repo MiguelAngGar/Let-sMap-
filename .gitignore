@@ -51,3 +51,9 @@ desktop.ini
 # Environment
 .env
 .env.local
+
+# Ficheros de prueba locales (metadatos, portadas, bitrate)
+test-audio/
+
+# Artefactos del montaje FUSE (ficheros borrados mientras estaban abiertos)
+.fuse_hidden*

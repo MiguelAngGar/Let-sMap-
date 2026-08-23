@@ -1,34 +1,64 @@
 /**
- * timeline.js
+ * timeline.js  v5
  * ─────────────────────────────────────────────────────────────────────────────
- * Canvas-based waveform display with playhead and click-to-seek.
+ * Canvas waveform with zoom, panning, beat grid, silence band and seeking.
  *
- * RENDERING APPROACH
- * ───────────────────
- * • The waveform is drawn fresh every animation frame (RAF loop).
- * • Each frame: two passes through the downsampled peak array —
- *   one for the "played" region (bright), one for "unplayed" (dim).
- *   The split index is derived from engine.currentTime each frame.
- * • With ~1400 points per pass this is <0.5 ms/frame on modern hardware.
- * • No offscreen canvas needed — the cost is trivially low.
+ * WHY ZOOM EXISTS
+ * ───────────────
+ * The whole song in ~900 px is ~230 ms per pixel: the silence we prepend is
+ * three pixels wide and a beat at 225 BPM is barely one, so neither the padding
+ * nor the grid can be judged by eye. Zoomed all the way in a pixel is about a
+ * third of a millisecond, which is finer than the offset field can even be set.
  *
- * DPR-AWARE CANVAS
- * ─────────────────
- * Physical canvas dimensions = CSS dimensions × devicePixelRatio.
- * All drawing coordinates are in physical pixels.
- * Mouse events (in CSS pixels) are converted to ratios before use,
- * so they are DPR-agnostic.
+ * WHO MOVES THE VIEW
+ * ──────────────────
+ * Only the user: the scrollbar, the wheel, Alt-drag, or a zoom step (which keeps
+ * the point of interest in place). Seeking never scrolls the view — re-centring
+ * on every click made the waveform feel like it was fighting back. The two
+ * exceptions both follow the mouse or the music: playback pages the window
+ * forward when the playhead would leave it, and dragging the playhead into the
+ * edge of the window scrolls in that direction.
  *
- * SEEK SYNC
- * ──────────
- * Click / drag fires onSeek(seconds) → caller calls engine.seekTo(t).
- * engine.seekTo() stops the source, updates _pauseOffset, and re-calls
- * play() if it was playing. play() recalculates _startTime, then
- * _startScheduler() finds the correct next beat automatically.
- * No extra sync step required here.
+ * Panning is eased towards a target instead of jumping, so a wheel notch glides
+ * rather than teleporting — at 60 fps the glide is ~100 ms.
+ *
+ * MOUSE / WHEEL
+ * ─────────────
+ *  • drag: puts the playhead exactly where you drag it, at every zoom level —
+ *    the whole point of zooming in is placing it precisely
+ *  • drag into the edge (zoomed): keeps scrolling while you hold there
+ *  • Alt-drag or middle-drag: pans the view
+ *  • wheel: pans (fitted, it is left to the page so the screen still scrolls)
+ *  • Ctrl/⌘ + wheel: zooms around the cursor
+ *  • double-click: back to the whole song
+ *
+ * WHAT IS DRAWN (back to front)
+ * ─────────────────────────────
+ *  • the silence that will be prepended to the export, as a shaded band with
+ *    its length written in it (always at least a visible sliver wide)
+ *  • the waveform of the window, peaks pulled from the engine's peak index
+ *    (exact samples at the deepest zoom levels — see AudioEngine.peaksFor)
+ *  • the map's beat grid from t = 0, thinned out automatically, with every
+ *    fourth line drawn as a bar line
+ *  • the line where the audio starts, and where the DETECTED first beat lands
+ *  • the hovered time, and the playhead
  */
 
 /* global AudioEngine */  // just for jsdoc; imported via <script> tag
+
+const ZOOM_STEPS  = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+const MIN_WINDOW  = 0.25  // seconds — deepest zoom shows at least this much
+const MIN_BEAT_PX = 8     // beat lines need at least this much spacing (CSS px)
+const MIN_BAR_PX  = 26    // …and bar-only lines at least this much
+const EASE        = 0.24  // how fast the view catches up with a pan target
+const EDGE_PX     = 16    // dragging this close to the edge scrolls the view
+const FOLLOW_LEAD = 0.02  // where the playhead lands when playback pages over
+// A mouse notch arrives as one big delta; a trackpad sends a stream of small
+// ones. PRECISE_PX tells them apart: below it the input is fine-grained enough
+// to apply straight away (easing a two-finger drag only adds lag), above it the
+// jump is eased. PINCH_STEP is how much accumulated pinch makes a zoom step.
+const PRECISE_PX  = 20
+const PINCH_STEP  = 24
 
 class WaveformTimeline {
   /**
@@ -36,46 +66,54 @@ class WaveformTimeline {
    * @param {HTMLCanvasElement} opts.canvas   Target canvas element
    * @param {AudioEngine} opts.engine         AudioEngine instance (must share lifetime)
    * @param {Function}    opts.onSeek         (seconds: number) => void
-   * @param {HTMLElement} [opts.timeEl]       Element whose textContent shows "0:00 / 3:45"
+   * @param {HTMLElement} [opts.timeEl]       Element whose textContent shows "0:00.000 / 3:45.120"
+   * @param {HTMLElement} [opts.scrollEl]     Scrollbar track (hidden while fitted)
+   * @param {HTMLElement} [opts.thumbEl]      Scrollbar thumb
+   * @param {Function}    [opts.onZoom]       ({zoom, atMin, atMax, fitted}) => void
    */
-  constructor({ canvas, engine, onSeek, timeEl = null }) {
-    this.canvas  = canvas
-    this.engine  = engine
-    this.onSeek  = onSeek
-    this.timeEl  = timeEl
+  constructor({ canvas, engine, onSeek, timeEl = null, scrollEl = null, thumbEl = null,
+                onZoom = null }) {
+    this.canvas   = canvas
+    this.engine   = engine
+    this.onSeek   = onSeek
+    this.timeEl   = timeEl
+    this.scrollEl = scrollEl
+    this.thumbEl  = thumbEl
+    this.onZoom   = onZoom
 
-    this._ctx         = canvas.getContext('2d')
-    this._active      = false
-    this._raf         = null
-    this._isDragging  = false
+    this._ctx    = canvas.getContext('2d')
+    this._active = false
+    this._raf    = null
 
-    // Physical pixel dimensions (updated in _resize)
+    this._zi     = 0        // index into ZOOM_STEPS — every song opens fitted
+    this._start  = 0        // window start being drawn (seconds)
+    this._target = 0        // where it is heading (see _settle)
+    this._drag   = null     // in-flight canvas drag
+    this._sdrag  = null     // in-flight scrollbar drag
+    this._hoverX = null     // CSS px, for the hovered-time readout
+    this._pinch  = 0        // accumulated trackpad pinch, see the wheel handler
+
     this._W = 0
     this._H = 0
     this._dpr = 1
 
-    // Build colour scheme once — matches style.css tokens
-    this._colors = WaveformTimeline._buildColors()
-
-    // Bound event handler references (needed for removeEventListener)
+    this._colors   = WaveformTimeline._buildColors()
     this._handlers = {}
 
-    // ResizeObserver keeps the canvas crisp if the window is resized
     this._ro = new ResizeObserver(() => this._resize())
     this._ro.observe(canvas)
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-  /** Start the animation loop and enable mouse interaction. */
   activate() {
     this._active = true
     this._resize()
     this._bindEvents()
     this._startRAF()
+    this._notifyZoom()
   }
 
-  /** Stop the animation loop and remove event listeners. */
   deactivate() {
     this._active = false
     this._stopRAF()
@@ -83,13 +121,150 @@ class WaveformTimeline {
     this._ro.disconnect()
   }
 
+  // ── Zoom ───────────────────────────────────────────────────────────────────
+
+  /** Deepest step that still shows MIN_WINDOW seconds. */
+  _maxIndex() {
+    const dur = this.engine.duration || 0
+    const max = dur > MIN_WINDOW ? dur / MIN_WINDOW : 1
+    let last = 0
+    for (let i = 0; i < ZOOM_STEPS.length; i++) {
+      if (ZOOM_STEPS[i] <= max + 1e-9) last = i
+    }
+    return last
+  }
+
+  get zoom()   { return ZOOM_STEPS[Math.min(this._zi, this._maxIndex())] }
+  get fitted() { return this._win() >= (this.engine.duration || 0) - 1e-9 }
+
+  zoomIn(anchor = null)  { this._setZoomIndex(this._zi + 1, anchor) }
+  zoomOut(anchor = null) { this._setZoomIndex(this._zi - 1, anchor) }
+  zoomFit() { this._zi = 0; this._setStart(0); this._notifyZoom() }
+
+  /** Reset to "whole song, from the top" — what every new song opens on. */
+  reset() { this.zoomFit() }
+
+  /**
+   * Zoom keeps a point of interest in place: the cursor when zooming with the
+   * wheel, the middle of the window otherwise. Jumping the view somewhere else
+   * on every step is the fastest way to lose your bearings.
+   */
+  _setZoomIndex(i, anchorTime = null) {
+    const next = Math.max(0, Math.min(this._maxIndex(), i))
+    if (next === this._zi) { this._notifyZoom(); return }
+
+    const before = this._window()
+    const at   = anchorTime == null ? before.start + before.win / 2 : anchorTime
+    const frac = before.win > 0 ? (at - before.start) / before.win : 0.5
+
+    this._zi = next
+    this._setStart(at - frac * this._win())
+    this._notifyZoom()
+  }
+
+  _notifyZoom() {
+    this.onZoom?.({
+      zoom:   this.zoom,
+      atMin:  this._zi <= 0,
+      atMax:  this._zi >= this._maxIndex(),
+      fitted: this.fitted
+    })
+  }
+
+  // ── View window ────────────────────────────────────────────────────────────
+
+  _win() {
+    const dur = this.engine.duration || 0
+    return Math.min(dur, dur / this.zoom)
+  }
+
+  _clampStart(s) {
+    const dur = this.engine.duration || 0
+    return Math.max(0, Math.min(dur - this._win(), s))
+  }
+
+  /**
+   * Move the view. `smooth` only sets the target and lets _settle ease into it,
+   * which is what the wheel wants; anything that tracks the mouse (dragging the
+   * scrollbar, dragging the waveform) must land immediately or it feels laggy.
+   */
+  _setStart(v, smooth = false) {
+    this._target = this._clampStart(v)
+    if (!smooth) this._start = this._target
+  }
+
+  /** Ease the drawn position towards the target — called once per frame. */
+  _settle() {
+    const d = this._target - this._start
+    if (Math.abs(d) < 1e-4) { this._start = this._target; return }
+    this._start += d * EASE
+  }
+
+  /** @returns {{start:number, end:number, win:number}} */
+  _window() {
+    const dur = this.engine.duration || 0
+    if (!(dur > 0)) return { start: 0, end: 1, win: 1 }
+    const win = this._win()
+    if (win >= dur - 1e-9) return { start: 0, end: dur, win: dur }
+    const start = this._clampStart(this._start)
+    return { start, end: start + win, win }
+  }
+
+  /**
+   * Page the window forward while playing, so the playhead cannot walk out of
+   * frame. Only while playing, and only when it actually leaves.
+   *
+   * The new window starts (almost) AT the playhead, not a chunk behind it: with
+   * a lead-in of 15% the page was already a sixth spent when it appeared, which
+   * at deep zoom made it look like it was flipping over and over.
+   */
+  _followPlayhead() {
+    if (this._drag || this._sdrag) return
+    if (!this.engine.isPlaying) return
+    const { start, win } = this._window()
+    if (win >= (this.engine.duration || 0) - 1e-9) return
+
+    const cur = this.engine.currentTime
+    if (cur < start || cur > start + win * 0.98) {
+      this._setStart(cur - win * FOLLOW_LEAD)
+    }
+  }
+
+  /**
+   * Dragging the playhead against the edge of the window scrolls the view, so a
+   * scrub can leave the visible slice without letting go. Speed grows with how
+   * far past the edge the mouse is, the way a text selection does.
+   */
+  _edgePan() {
+    const d = this._drag
+    if (!d || d.mode !== 'seek' || this.fitted) return
+
+    const w = this._cssWidth()
+    if (!(w > 0)) return
+
+    let dir = 0
+    if (d.x < EDGE_PX)      dir = -1
+    else if (d.x > w - EDGE_PX) dir = 1
+    if (!dir) return
+
+    const over  = Math.min(dir < 0 ? EDGE_PX - d.x : d.x - (w - EDGE_PX), 80)
+    const speed = 0.004 + (over / 80) * 0.026        // window fraction per frame
+    const { win } = this._window()
+
+    this._setStart(this._start + dir * win * speed)
+    const now = this._window()
+    this.onSeek(dir < 0 ? now.start : now.end)
+  }
+
   // ── Canvas sizing ──────────────────────────────────────────────────────────
 
+  _cssWidth() { return this.canvas.getBoundingClientRect().width }
+
   _resize() {
-    const rect   = this.canvas.getBoundingClientRect()
-    this._dpr    = window.devicePixelRatio || 1
-    this._W      = Math.round(rect.width  * this._dpr)
-    this._H      = Math.round(rect.height * this._dpr)
+    const rect = this.canvas.getBoundingClientRect()
+    this._dpr  = window.devicePixelRatio || 1
+    this._W    = Math.round(rect.width  * this._dpr)
+    this._H    = Math.round(rect.height * this._dpr)
     this.canvas.width  = this._W
     this.canvas.height = this._H
   }
@@ -115,77 +290,185 @@ class WaveformTimeline {
   // ── Drawing ────────────────────────────────────────────────────────────────
 
   _draw() {
-    const ctx     = this._ctx
-    const W       = this._W
-    const H       = this._H
-    const engine  = this.engine
-    const colors  = this._colors
+    const ctx    = this._ctx
+    const W      = this._W
+    const H      = this._H
+    const engine = this.engine
+    const colors = this._colors
 
-    // Background
     ctx.fillStyle = colors.bg
     ctx.fillRect(0, 0, W, H)
 
-    const data = engine.waveformData
-
-    // Loading state — no waveform data yet
-    if (!data || engine.duration <= 0) {
+    if (!engine.waveformData || engine.duration <= 0) {
       ctx.fillStyle = colors.unplayed
       ctx.font      = `${Math.round(11 * this._dpr)}px -apple-system, system-ui, sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillText('Loading audio…', W / 2, H / 2)
       this._updateTimeDisplay(0, 0)
+      this._updateScrollbar()
       return
     }
 
-    const cur     = engine.currentTime
-    const dur     = engine.duration
-    const leadIn  = engine.leadIn || 0
-    const ratio   = Math.min(cur / dur, 1)
-    const headX   = ratio * W
-    const mid     = H / 2
-    const maxAmp  = H * 0.44    // bars fill 88% of total height (44% each side)
+    this._edgePan()
+    this._followPlayhead()
+    this._settle()
 
-    // The waveform occupies only the audio region; the lead-in silence that
-    // will be prepended to the exported song shows as a flat area before it.
-    const leadX   = (leadIn / dur) * W
-    const audioW  = Math.max(1, W - leadX)
-    const barW    = audioW / data.length
-    const audioRatio = Math.max(0, Math.min((cur - leadIn) / Math.max(dur - leadIn, 1e-9), 1))
-    const splitI  = Math.floor(audioRatio * data.length)
+    const { start, end, win } = this._window()
+    const cur    = engine.currentTime
+    const leadIn = engine.leadIn || 0
+    // The scrollbar floats over the bottom edge, so when it is there the drawing
+    // area stops above it instead of being half-covered by it
+    const HD     = H - (this._scrollVisible() ? Math.round(13 * this._dpr) : 0)
+    const mid    = HD / 2
+    const maxAmp = HD * 0.42
+    const toX    = t => ((t - start) / win) * W
 
-    // Pass 1 — unplayed (dim)
-    ctx.fillStyle = colors.unplayed
-    for (let i = splitI; i < data.length; i++) {
-      const x   = leadX + i * barW
-      const amp = data[i] * maxAmp
-      ctx.fillRect(x, mid - amp, Math.max(barW - 0.5, 0.5), Math.max(amp * 2, 1))
+    this._drawSilence(ctx, toX, leadIn, mid, maxAmp, HD)
+    this._drawWave(ctx, start, end, win, leadIn, cur, mid, maxAmp)
+    this._drawGrid(ctx, toX, start, end, win, HD)
+    this._drawMarkers(ctx, toX, leadIn, HD, mid, maxAmp)
+    this._drawHover(ctx, start, win, HD)
+    this._drawHead(ctx, toX(cur), HD)
+
+    this._updateTimeDisplay(cur, engine.duration)
+    this._updateScrollbar()
+  }
+
+  /** The silence that will be prepended, as a shaded band with its length in it. */
+  _drawSilence(ctx, toX, leadIn, mid, maxAmp, H) {
+    if (leadIn <= 0) return
+
+    const x0 = toX(0)
+    const x1 = toX(leadIn)
+    // Never let it vanish: at ×1 the band can be a fraction of a pixel wide,
+    // and "the silence is not visible" was exactly the complaint.
+    const w = Math.max(x1 - x0, 2 * this._dpr)
+
+    ctx.fillStyle = this._colors.silence
+    ctx.fillRect(x0, 0, w, H)
+
+    // Centre the label on the VISIBLE part of the band: zoomed in, the band
+    // usually starts off-screen to the left, and centring on its true middle
+    // would put the text outside the canvas.
+    const visX0 = Math.max(x0, 0)
+    const visX1 = Math.min(x0 + w, this._W)
+    if (visX1 - visX0 < 46 * this._dpr) return
+
+    const label = leadIn >= 1 ? `${leadIn.toFixed(3)} s` : `${Math.round(leadIn * 1000)} ms`
+    ctx.fillStyle    = this._colors.silenceText
+    ctx.font         = `${Math.round(10 * this._dpr)}px -apple-system, system-ui, sans-serif`
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, (visX0 + visX1) / 2, mid - maxAmp * 0.5)
+  }
+
+  /** Peaks for the visible window, split into played / unplayed at the playhead. */
+  _drawWave(ctx, start, end, win, leadIn, cur, mid, maxAmp) {
+    const W    = this._W
+    const step = Math.max(1, Math.round(2 * this._dpr))   // one bar per ~1 CSS px
+    const cols = Math.max(1, Math.floor(W / step))
+
+    const peaks = this.engine.peaksFor(start - leadIn, end - leadIn, cols)
+    const split = Math.round(((cur - start) / win) * cols)
+    const barW  = Math.max(step - 0.5, 0.5)
+
+    ctx.fillStyle = this._colors.unplayed
+    for (let i = Math.max(0, split); i < cols; i++) {
+      const amp = peaks[i] * maxAmp
+      ctx.fillRect(i * step, mid - amp, barW, Math.max(amp * 2, 1))
     }
 
-    // Pass 2 — played (bright, accent colour)
-    ctx.fillStyle = colors.played
-    for (let i = 0; i < splitI; i++) {
-      const x   = leadX + i * barW
-      const amp = data[i] * maxAmp
-      ctx.fillRect(x, mid - amp, Math.max(barW - 0.5, 0.5), Math.max(amp * 2, 1))
+    ctx.fillStyle = this._colors.played
+    for (let i = 0; i < Math.min(split, cols); i++) {
+      const amp = peaks[i] * maxAmp
+      ctx.fillRect(i * step, mid - amp, barW, Math.max(amp * 2, 1))
     }
+  }
 
-    // Audio-start marker: a thin line where the prepended silence ends
-    if (leadX > 0.5) {
-      ctx.fillStyle = colors.unplayed
-      ctx.fillRect(Math.round(leadX), Math.round(mid - maxAmp), Math.max(1, this._dpr), Math.round(maxAmp * 2))
+  /**
+   * The exported map's beat grid: beat K sits at K × beatDur from preview time 0,
+   * the same lines the metronome clicks on. Every beat while they are far enough
+   * apart to read, bar lines only when they are not, and nothing at all when even
+   * those would be a picket fence — zoomed out the grid says nothing anyway.
+   */
+  _drawGrid(ctx, toX, start, end, win, H) {
+    const bpm = this.engine.bpm
+    if (!(bpm > 0)) return
+
+    const beatDur   = 60 / bpm
+    const pxPerBeat = (beatDur / win) * (this._W / this._dpr)
+
+    const stride = pxPerBeat >= MIN_BEAT_PX    ? 1
+                 : pxPerBeat * 4 >= MIN_BAR_PX ? 4
+                 : 0
+    if (!stride) return
+
+    const first = Math.max(0, Math.ceil(start / beatDur))
+    const last  = Math.floor(end / beatDur)
+    const lineW = Math.max(1, Math.round(this._dpr))
+    const top   = Math.round(H * 0.14)
+
+    // Every fourth line drawn is the strong one, whatever the thinning — with
+    // one line per bar already, marking every multiple of 4 beats would make
+    // every single line a strong one.
+    const barEvery = Math.max(4, stride * 4)
+
+    for (let n = first; n <= last; n++) {
+      if (n % stride !== 0) continue
+      const isBar = n % barEvery === 0
+      ctx.fillStyle = isBar ? this._colors.gridBar : this._colors.grid
+      const x = Math.round(toX(n * beatDur))
+      if (isBar) ctx.fillRect(x, 0, lineW, H)
+      else       ctx.fillRect(x, top, lineW, H - top * 2)
     }
+  }
 
-    // Playhead glow (subtle halo, drawn before the sharp line)
-    ctx.fillStyle = colors.headGlow
+  /**
+   * Where the audio starts — the end of the silence we prepend.
+   *
+   * There used to be a marker for the DETECTED first beat here as well. It was
+   * removed on purpose: it marks where the detector thought the beat was, so
+   * once the offset is corrected it drifts off the grid while the real transient
+   * lands on it, which reads backwards. The waveform against the grid lines is
+   * the honest reference, and that is what is left.
+   */
+  _drawMarkers(ctx, toX, leadIn, H, mid, maxAmp) {
+    if (leadIn <= 0) return
+    ctx.fillStyle = this._colors.audioStart
+    ctx.fillRect(Math.round(toX(leadIn)), Math.round(mid - maxAmp),
+                 Math.max(1, Math.round(this._dpr)), Math.round(maxAmp * 2))
+  }
+
+  /** Faint line and timestamp under the mouse — the offset work needs numbers. */
+  _drawHover(ctx, start, win, H) {
+    if (this._hoverX == null || this._drag) return
+    const x = this._hoverX * this._dpr
+    if (x < 0 || x > this._W) return
+
+    const t = start + (x / this._W) * win
+    ctx.fillStyle = this._colors.hover
+    ctx.fillRect(Math.round(x), 0, Math.max(1, Math.round(this._dpr)), H)
+
+    const label = _fmt(t)
+    ctx.font         = `${Math.round(10 * this._dpr)}px -apple-system, system-ui, sans-serif`
+    ctx.textBaseline = 'top'
+    const pad = 4 * this._dpr
+    const w   = ctx.measureText(label).width + pad * 2
+    const bx  = Math.min(Math.max(x - w / 2, 0), this._W - w)
+
+    ctx.fillStyle = this._colors.hoverBg
+    ctx.fillRect(bx, 0, w, 14 * this._dpr)
+    ctx.fillStyle = this._colors.hoverText
+    ctx.textAlign = 'left'
+    ctx.fillText(label, bx + pad, 2.5 * this._dpr)
+  }
+
+  _drawHead(ctx, headX, H) {
+    ctx.fillStyle = this._colors.headGlow
     ctx.fillRect(headX - 4, 0, 8, H)
-
-    // Playhead line (crisp 2-px, anti-aliased if sub-pixel)
-    ctx.fillStyle = colors.head
+    ctx.fillStyle = this._colors.head
     ctx.fillRect(Math.round(headX) - 1, 0, 2, H)
-
-    // Update time display element
-    this._updateTimeDisplay(cur, dur)
   }
 
   _updateTimeDisplay(cur, dur) {
@@ -193,33 +476,166 @@ class WaveformTimeline {
     this.timeEl.textContent = `${_fmt(cur)} / ${_fmt(dur)}`
   }
 
+  /** Whether there is anything to scroll — the bar only exists when there is. */
+  _scrollVisible() {
+    if (!this.scrollEl) return false
+    const dur = this.engine.duration || 0
+    return dur > 0 && this._win() < dur - 1e-9
+  }
+
+  _updateScrollbar() {
+    if (!this.scrollEl) return
+    const dur = this.engine.duration || 0
+    const { start, win } = this._window()
+    const hide = !this._scrollVisible()
+
+    this.scrollEl.classList.toggle('hidden', hide)
+    if (hide || !this.thumbEl) return
+
+    this.thumbEl.style.left  = `${(start / dur) * 100}%`
+    this.thumbEl.style.width = `${Math.max((win / dur) * 100, 3)}%`
+  }
+
   // ── Mouse interaction ──────────────────────────────────────────────────────
+
+  _localX(e) {
+    return e.clientX - this.canvas.getBoundingClientRect().left
+  }
 
   _bindEvents() {
     const cv = this.canvas
 
     this._handlers.mousedown = (e) => {
-      this._isDragging = true
-      cv.classList.add('dragging')
-      this._seekFromEvent(e)
-    }
-    this._handlers.mousemove = (e) => {
-      if (this._isDragging) this._seekFromEvent(e)
-    }
-    this._handlers.mouseup = () => {
-      this._isDragging = false
-      cv.classList.remove('dragging')
+      // Dragging places the playhead — at every zoom level, because placing it
+      // precisely is the whole reason for zooming in. Panning by hand is the
+      // modifier gesture (Alt or the middle button), on top of the scrollbar
+      // and the wheel.
+      const pan = !this.fitted && (e.altKey || e.button === 1)
+      this._drag = {
+        mode: pan ? 'pan' : 'seek',
+        x0: e.clientX, x: this._localX(e),
+        start0: this._window().start, moved: false
+      }
+      cv.classList.toggle('panning', pan)
+      if (!pan) this._seekFromEvent(e)
     }
 
-    cv.addEventListener('mousedown', this._handlers.mousedown)
+    this._handlers.mousemove = (e) => {
+      const d = this._drag
+      if (!d) { this._hoverX = this._localX(e); return }
+
+      d.x = this._localX(e)
+      if (Math.abs(e.clientX - d.x0) > 2) d.moved = true
+
+      if (d.mode === 'seek') { this._seekFromEvent(e); return }
+      this._setStart(d.start0 - ((e.clientX - d.x0) / this._cssWidth()) * this._window().win)
+    }
+
+    this._handlers.mouseup = () => {
+      if (!this._drag) return
+      this._drag = null
+      cv.classList.remove('panning')
+    }
+
+    this._handlers.mouseleave = () => { this._hoverX = null }
+
+    this._handlers.wheel = (e) => {
+      const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+      const px  = e.deltaMode === 1 ? raw * 16 : raw        // some mice report lines
+
+      // Zoom. A trackpad pinch reaches the page as ctrl+wheel with a stream of
+      // tiny deltas (that is how Chromium reports it), so it is accumulated and
+      // spends a level once it adds up — otherwise one pinch would fly through
+      // every level. A real Ctrl + notch is one big delta: one level, at once.
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        const { start, win } = this._window()
+        const at = start + (this._localX(e) / this._cssWidth()) * win
+
+        let step = 0
+        if (Math.abs(px) >= PINCH_STEP) {
+          step = Math.sign(px)
+          this._pinch = 0
+        } else {
+          this._pinch += px
+          if (Math.abs(this._pinch) >= PINCH_STEP) {
+            step = Math.sign(this._pinch)
+            this._pinch = 0
+          }
+        }
+        if (step < 0) this.zoomIn(at)
+        else if (step > 0) this.zoomOut(at)
+        return
+      }
+
+      // Panning only makes sense zoomed in; fitted, the wheel belongs to the
+      // page so the rest of the screen still scrolls normally.
+      if (this.fitted) return
+      e.preventDefault()
+
+      // Proportional to the real delta, so two fingers move the waveform by as
+      // much as they moved. Fine-grained input lands immediately (a trackpad is
+      // already smooth, easing it would just feel late); a coarse mouse notch is
+      // eased so it glides instead of teleporting.
+      const { win } = this._window()
+      const smooth  = Math.abs(px) >= PRECISE_PX
+      this._setStart(this._target + (px / this._cssWidth()) * win, smooth)
+    }
+
+    this._handlers.dblclick = () => this.zoomFit()
+
+    cv.addEventListener('mousedown',  this._handlers.mousedown)
+    cv.addEventListener('mouseleave', this._handlers.mouseleave)
+    cv.addEventListener('wheel',      this._handlers.wheel, { passive: false })
+    cv.addEventListener('dblclick',   this._handlers.dblclick)
     window.addEventListener('mousemove', this._handlers.mousemove)
     window.addEventListener('mouseup',   this._handlers.mouseup)
+
+    // ── Scrollbar ───────────────────────────────────────────────────────────
+    if (this.scrollEl) {
+      this._handlers.sdown = (e) => {
+        const dur  = this.engine.duration || 0
+        const rect = this.scrollEl.getBoundingClientRect()
+        const win  = this._window().win
+        if (!(this.thumbEl && e.target === this.thumbEl)) {
+          // Clicking the track jumps there, centred on the click
+          this._setStart(((e.clientX - rect.left) / rect.width) * dur - win / 2)
+        }
+        this._sdrag = { x0: e.clientX, start0: this._window().start, rect }
+        this.scrollEl.classList.add('dragging')
+      }
+      this._handlers.smove = (e) => {
+        const s = this._sdrag
+        if (!s) return
+        const dur = this.engine.duration || 0
+        this._setStart(s.start0 + ((e.clientX - s.x0) / s.rect.width) * dur)
+      }
+      this._handlers.sup = () => {
+        if (!this._sdrag) return
+        this._sdrag = null
+        this.scrollEl.classList.remove('dragging')
+      }
+
+      this.scrollEl.addEventListener('mousedown', this._handlers.sdown)
+      window.addEventListener('mousemove', this._handlers.smove)
+      window.addEventListener('mouseup',   this._handlers.sup)
+    }
   }
 
   _unbindEvents() {
-    this.canvas.removeEventListener('mousedown', this._handlers.mousedown)
+    const cv = this.canvas
+    cv.removeEventListener('mousedown',  this._handlers.mousedown)
+    cv.removeEventListener('mouseleave', this._handlers.mouseleave)
+    cv.removeEventListener('wheel',      this._handlers.wheel)
+    cv.removeEventListener('dblclick',   this._handlers.dblclick)
     window.removeEventListener('mousemove', this._handlers.mousemove)
     window.removeEventListener('mouseup',   this._handlers.mouseup)
+
+    if (this.scrollEl) {
+      this.scrollEl.removeEventListener('mousedown', this._handlers.sdown)
+      window.removeEventListener('mousemove', this._handlers.smove)
+      window.removeEventListener('mouseup',   this._handlers.sup)
+    }
   }
 
   /** Convert a mouse event (CSS-pixel coords) to a song position and fire onSeek. */
@@ -227,37 +643,53 @@ class WaveformTimeline {
     if (!this.engine.duration) return
     const rect  = this.canvas.getBoundingClientRect()    // CSS pixels
     const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-    this.onSeek(ratio * this.engine.duration)
+    const { start, win } = this._window()
+    this.onSeek(start + ratio * win)
   }
 
   // ── Colours ────────────────────────────────────────────────────────────────
 
-  /**
-   * Build the colour set once at class instantiation.
-   * Matches the CSS token values in style.css for both light and dark modes.
-   */
   static _buildColors() {
     const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
     return dark ? {
-      bg:        '#0e0e12',
-      played:    'rgba(130, 110, 255, 0.82)',
-      unplayed:  'rgba(255, 255, 255, 0.11)',
-      head:      '#b0a0ff',
-      headGlow:  'rgba(124, 106, 247, 0.22)'
+      bg:          '#0e0e12',
+      played:      'rgba(130, 110, 255, 0.82)',
+      unplayed:    'rgba(255, 255, 255, 0.11)',
+      head:        '#b0a0ff',
+      headGlow:    'rgba(124, 106, 247, 0.22)',
+      silence:     'rgba(255, 255, 255, 0.07)',
+      silenceText: 'rgba(255, 255, 255, 0.45)',
+      grid:        'rgba(255, 255, 255, 0.10)',
+      gridBar:     'rgba(255, 255, 255, 0.22)',
+      audioStart:  'rgba(255, 255, 255, 0.35)',
+      hover:       'rgba(255, 255, 255, 0.28)',
+      hoverBg:     'rgba(20, 20, 28, 0.85)',
+      hoverText:   'rgba(255, 255, 255, 0.72)'
     } : {
-      bg:        '#f5f5fa',
-      played:    'rgba(100, 80, 220, 0.72)',
-      unplayed:  'rgba(0, 0, 40, 0.12)',
-      head:      '#5a4bd1',
-      headGlow:  'rgba(108, 92, 231, 0.18)'
+      bg:          '#f5f5fa',
+      played:      'rgba(100, 80, 220, 0.72)',
+      unplayed:    'rgba(0, 0, 40, 0.12)',
+      head:        '#5a4bd1',
+      headGlow:    'rgba(108, 92, 231, 0.18)',
+      silence:     'rgba(0, 0, 40, 0.06)',
+      silenceText: 'rgba(0, 0, 40, 0.45)',
+      grid:        'rgba(0, 0, 40, 0.11)',
+      gridBar:     'rgba(0, 0, 40, 0.24)',
+      audioStart:  'rgba(0, 0, 40, 0.38)',
+      hover:       'rgba(0, 0, 40, 0.30)',
+      hoverBg:     'rgba(255, 255, 255, 0.9)',
+      hoverText:   'rgba(0, 0, 40, 0.7)'
     }
   }
 }
 
-/** Format seconds → "m:ss" */
+/** Format seconds → "m:ss.mmm" — milliseconds matter at this zoom. */
 function _fmt(s) {
-  const m = Math.floor(s / 60)
-  return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`
+  const t  = Math.max(0, s)
+  const m  = Math.floor(t / 60)
+  const ss = Math.floor(t % 60)
+  const ms = Math.round((t - Math.floor(t)) * 1000)
+  return `${m}:${String(ss).padStart(2, '0')}.${String(ms === 1000 ? 999 : ms).padStart(3, '0')}`
 }
 
 window.WaveformTimeline = WaveformTimeline

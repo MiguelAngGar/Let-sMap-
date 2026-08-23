@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu, screen } = require('electron')
 const path   = require('path')
 const os     = require('os')
 const Store  = require('electron-store')
@@ -7,8 +7,9 @@ const bsDetect = require('./beatsaber-detect')
 
 const phase1   = require('../pipeline/phase1')
 const phase2   = require('../pipeline/phase2')
-const metadata = require('../pipeline/metadata')
-const cover    = require('../pipeline/cover')
+const metaResolve = require('../pipeline/meta-resolve')
+const metaPrefetch = require('../pipeline/meta-prefetch')
+const cover       = require('../pipeline/cover')
 
 // ── Persistent settings ───────────────────────────────────────────────────────
 // macOS: ~/Library/Application Support/lets-map/config.json
@@ -18,24 +19,53 @@ const store = new Store({
   defaults: {
     exportDir:   path.join(os.homedir(), 'Documents', 'BeatSaberMaps'),
     mapperName:  '',
-    songVolume:  75,
-    metroVolume: 100,
+    songVolume:  50,
+    metroVolume: 80,
+    metroSound:  'click',  // see METRO_SOUNDS in renderer/audio-engine.js
     exportDirUserSet: false,  // true once the user picks a folder manually
     language:    'system',
-    oggQuality:  10,       // Vorbis VBR quality 0–10 for the exported song.ogg (10 = max)
-    matchSourceQuality: true // Match the upload's bitrate instead of forcing q10 (keeps size/quality)
+    oggQuality:  10,       // Vorbis quality CEILING 0–10 for the exported song.ogg
+                           // (a source already poorer than this keeps its own bitrate)
+
+    // Minimum silence the exported audio must END UP with, in seconds. Defaults
+    // are the ScoreSaber ranking criteria (intro ≥ 1.5 s, outro > 2 s); the user
+    // can change them and the Settings screen warns when they fall below.
+    // Grid alignment is added on top of these, independently.
+    leadInSeconds:  1.5,
+    coldEndSeconds: 2.0
   }
 })
+
+// Metronome voices the renderer can synthesise (renderer/audio-engine.js owns
+// the actual sounds; this list is only here to reject nonsense from settings).
+const METRO_SOUNDS = ['click', 'beep', 'tick', 'block', 'thump']
 
 // ── Window ────────────────────────────────────────────────────────────────────
 let win
 
+// Auto-fit state. fitIgnoreUntil swallows the resize events our own
+// setContentSize causes, so they are not mistaken for the user grabbing the edge.
+let fitIgnoreUntil = 0
+let userResized    = false
+// The drop screen needs far less than this; keeping the floor at the starting
+// height means the window only ever grows for the BPM screen and shrinks back,
+// instead of collapsing to a letterbox every time you go back for another song.
+const MIN_FIT_HEIGHT = 620
+
 function createWindow() {
   win = new BrowserWindow({
-    width:  860,
-    height: 680,
-    minWidth:  720,
-    minHeight: 560,
+    // Sized so the BPM screen fits without scrolling: the waveform is 150 px
+    // tall now, and under it live the readout, both criteria notes, the volumes,
+    // the tempo, the candidates and the buttons.
+    // Height is not fixed: each view asks for exactly what it needs through
+    // window:fit-height, so no screen is a mostly-empty box. This is the
+    // starting size for the drop screen. useContentSize matters — without it
+    // these numbers include the window frame, which on Windows ate ~39 px.
+    useContentSize: true,
+    width:  960,
+    height: 620,
+    minWidth:  780,
+    minHeight: 520,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     autoHideMenuBar: true,
     backgroundColor: '#0d0d0f',
@@ -45,6 +75,11 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false
     }
+  })
+
+  // Once the user resizes the window by hand, stop second-guessing them
+  win.on('resize', () => {
+    if (Date.now() > fitIgnoreUntil) userResized = true
   })
 
   win.loadFile(path.join(__dirname, '../renderer/index.html'))
@@ -131,10 +166,17 @@ ipcMain.handle('settings:save', (_e, data) => {
   if (typeof data.songVolume  === 'number') store.set('songVolume',  data.songVolume)
   if (typeof data.metroVolume === 'number') store.set('metroVolume', data.metroVolume)
   if (typeof data.language    === 'string') store.set('language',    data.language)
+  if (typeof data.metroSound  === 'string' && METRO_SOUNDS.includes(data.metroSound)) {
+    store.set('metroSound', data.metroSound)
+  }
   if (typeof data.oggQuality  === 'number' && Number.isFinite(data.oggQuality)) {
     store.set('oggQuality', Math.min(10, Math.max(0, Math.round(data.oggQuality))))
   }
-  if (typeof data.matchSourceQuality === 'boolean') store.set('matchSourceQuality', data.matchSourceQuality)
+  for (const key of ['leadInSeconds', 'coldEndSeconds']) {
+    const v = Number(data[key])
+    // 15 s is the outro ceiling in the criteria; nothing sensible goes past it
+    if (Number.isFinite(v) && v >= 0) store.set(key, Math.min(15, Math.round(v * 100) / 100))
+  }
   return store.store
 })
 
@@ -173,10 +215,24 @@ ipcMain.handle('song:analyze', async (event, filePath) => {
 
   try {
     send('convert', 'Converting audio…')
-    const { oggPath, originalPath, analysis, originalName } = await phase1.run(filePath)
+
+    // Resolve the metadata alongside the analysis: by the time the user has
+    // checked the BPM, the answer (lookup, artwork) is already in.
+    metaPrefetch.start({
+      filePath,
+      originalName: path.basename(filePath, path.extname(filePath))
+    })
+
+    const { oggPath, originalPath, analysis, originalName, trailingSilence } =
+      await phase1.run(filePath)
     const candidates = buildCandidates(analysis.bpm, analysis.tempo_candidates)
 
-    return { success: true, oggPath, originalPath, analysis, candidates, originalName }
+    return {
+      success: true, oggPath, originalPath, analysis, candidates, originalName,
+      trailingSilence,
+      // What the export will aim for, so the view can show the real outro
+      coldEnd: store.get('coldEndSeconds')
+    }
   } catch (err) {
     console.error('[main] song:analyze error:', err)
     return { success: false, error: err.message }
@@ -185,26 +241,50 @@ ipcMain.handle('song:analyze', async (event, filePath) => {
 
 // ── IPC: metadata lookup + confidence (between BPM view and map creation) ───
 
-ipcMain.handle('song:fetch-meta', async (_e, originalName) => {
-  const fallback = { title: originalName, artist: '', album: '' }
-  try {
-    const meta = await metadata.fetch(originalName)
-    const coverPath = meta.found
-      ? await cover.fetchRemote(meta.artist, meta.title)
-      : null
+ipcMain.handle('song:fetch-meta', async (_e, arg) => {
+  // The renderer sends { filePath, originalName }. A bare string (older
+  // renderer) still works, it just has no file to read tags from.
+  const { filePath, originalName } = (typeof arg === 'string')
+    ? { filePath: null, originalName: arg }
+    : (arg || {})
 
-    // Confident requires BOTH a confident metadata match AND a real cover —
-    // otherwise show the confirmation screen so the user can fix things.
+  // Even a total failure should reach the confirmation screen with the best
+  // guess available, rather than an empty form.
+  const guess    = metaResolve.fromFilename(originalName || '')
+  const fallback = { title: guess.title, artist: guess.artist, album: '' }
+
+  try {
+    // The file's own tags come first; the online lookup only runs when the
+    // file has nothing usable (see pipeline/meta-resolve.js). Normally this was
+    // already resolved during the analysis, so there is nothing to wait for.
+    const pending = metaPrefetch.get(filePath)
+    let res = pending ? await pending : null
+    if (res) console.log('[main] metadata came from the prefetch')
+    if (!res) res = await metaResolve.resolve({ filePath, originalName })
+    console.log('[main] metadata from ' + res.source +
+                ' (confident=' + res.confident + ', cover=' + !!res.coverPath + ')')
+
     return {
       success:   true,
-      meta:      { title: meta.title, artist: meta.artist, album: meta.album },
-      coverPath,
-      confident: !!(meta.confident && coverPath)
+      meta:      res.meta,
+      coverPath: res.coverPath,
+      confident: res.confident,
+      source:    res.source
     }
   } catch (err) {
     console.error('[main] song:fetch-meta error:', err)
-    return { success: false, meta: fallback, coverPath: null, confident: false }
+    return { success: false, meta: fallback, coverPath: null, confident: false, source: 'file' }
   }
+})
+
+// Image dropped on the confirmation screen → processed to 512×512 JPEG.
+// One entry point for every shape a drag can take: a local path, a file:// URL
+// (dropped from a file manager), an http(s) URL or a data: URL (dragged
+// straight out of a browser). Returns null on anything unreadable.
+ipcMain.handle('meta:cover-from-drop', async (_e, src) => {
+  const result = await cover.fromDrop(src)
+  if (!result) console.warn('[main] dropped cover could not be used:', String(src).slice(0, 120))
+  return result
 })
 
 // User picks a local image as cover → processed to 512×512 JPEG
@@ -226,12 +306,39 @@ ipcMain.handle('meta:select-cover', async () => {
 
 // ── IPC: pipeline — phase 2 (finalize with confirmed BPM) ────────────────────
 
+/**
+ * Make the window exactly as tall as the renderer says the active view needs.
+ * Clamped to the display it is on, never below the minimum, and ignored once
+ * the user has resized the window themselves.
+ */
+ipcMain.handle('window:fit-height', (event, height) => {
+  const w = BrowserWindow.fromWebContents(event.sender)
+  if (!w || userResized || w.isMaximized() || w.isFullScreen()) return
+
+  const area     = screen.getDisplayMatching(w.getBounds()).workArea
+  const [cw, ch] = w.getContentSize()
+  const target   = Math.max(MIN_FIT_HEIGHT,
+                            Math.min(Math.round(Number(height) || 0), area.height - 80))
+  if (!Number.isFinite(target) || Math.abs(target - ch) < 8) return
+
+  fitIgnoreUntil = Date.now() + 600
+  w.setContentSize(cw, target, false)
+
+  // Growing must not push the window off the bottom of the screen
+  const b = w.getBounds()
+  if (b.y + b.height > area.y + area.height) {
+    w.setPosition(b.x, Math.max(area.y, area.y + area.height - b.height))
+  }
+})
+
 ipcMain.handle('song:create-map', async (event, {
   oggPath,
   originalPath,
   analysis,
   confirmedBpm,
   halfBeatShift,
+  extraBeats,
+  offsetNudgeMs,
   originalName,
   meta,
   coverPath
@@ -249,13 +356,16 @@ ipcMain.handle('song:create-map', async (event, {
       analysis,
       confirmedBpm,
       halfBeatShift,
+      extraBeats,
+      offsetNudgeMs,
       originalName,
       meta,
       coverPath,
       exportDir:  store.get('exportDir'),
       mapperName: store.get('mapperName'),
       oggQuality: store.get('oggQuality'),
-      matchSource: store.get('matchSourceQuality'),
+      leadIn:     store.get('leadInSeconds'),
+      coldEnd:    store.get('coldEndSeconds'),
       send
     })
 
