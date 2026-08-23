@@ -34,7 +34,7 @@ The feedback release: metadata that trusts the file, silence you can dial in at 
 ## 📥 Downloads
 
 - **Windows**: `Let'sMap! Setup 0.4.0.exe` (NSIS, x64)
-- **macOS**: `Let'sMap!-0.4.0.dmg` (Apple Silicon)
+- **macOS**: `Let'sMap!-0.4.0-arm64.dmg` (Apple Silicon)
 
 The macOS build is not notarized yet, so the first launch needs right-click → Open.
 
