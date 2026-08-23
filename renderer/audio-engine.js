@@ -40,6 +40,20 @@ const WAVEFORM_POINTS   = 1400   // number of peak samples to store (overview)
 // zoom levels show the real shape of the transient rather than a 6 ms block.
 const PEAK_STEP         = 256
 
+// ── Preview playback speed ────────────────────────────────────────────────────
+//
+// Preview ONLY. Nothing here reaches the exported map: phase 2 pads and encodes
+// the original file, and the rate is reset to 1 for every new song (see
+// BpmView.show), so it can never be saved by accident.
+//
+// Slowing the preview down is how you hear whether a click sits exactly on a
+// transient — at 0.3× a 20 ms error is obvious where at 1× it is a smear. It
+// pitch-shifts the song (Web Audio resamples; there is no pitch-preserving
+// stretch in the platform), which is fine for checking alignment.
+const RATE_MIN  = 0.1
+const RATE_MAX  = 1.5
+const RATE_STEP = 0.1
+
 class AudioEngine {
   constructor() {
     this._ctx          = null
@@ -59,6 +73,18 @@ class AudioEngine {
     this.leadIn        = 0        // virtual silence before the audio (s) — the
                                   // same silence that will be prepended to the
                                   // exported song, so the preview mirrors the map
+    // The lead-in is two things stuck together, and the waveform labels them
+    // apart: whole beats of silence (the ± control) and, right up against the
+    // music, the sub-beat slice that puts beat 1 on the grid — the offset.
+    this.leadOffset    = 0        // sub-beat part of leadIn (s), 0 ≤ x ≤ leadIn
+    // The outro, same idea at the other end: what the song already ends with,
+    // and what the export tops it up by. tailPad is virtual — it is not in the
+    // decoded buffer — so it extends `duration` but has nothing to play.
+    this.tailOwn       = 0        // silence the song itself ends with (s)
+    this.tailPad       = 0        // silence the export will add after it (s)
+
+    this.rate          = 1        // preview speed, RATE_MIN…RATE_MAX. Preview only.
+    this._endTimer     = null     // fires when the preview reaches its end
 
     // Volume levels (adjustable before or after init via setters below)
     this.songVolume    = 0.50     // 50% — leaves plenty of room for the clicks
@@ -102,17 +128,23 @@ class AudioEngine {
 
   get isPlaying() { return this._isPlaying }
 
-  /** Total preview duration: virtual lead-in silence + audio. */
-  get duration() { return this.leadIn + this._audioDuration }
+  /** Total preview duration: lead-in silence + audio + the outro we will add. */
+  get duration() { return this.leadIn + this._audioDuration + this.tailPad }
+
+  /** Preview time at which the decoded audio runs out. */
+  get audioEnd() { return this.leadIn + this._audioDuration }
 
   /**
    * Current playback position in seconds.
    * Works whether playing or paused.
+   *
+   * Preview time runs `rate` times faster than the audio clock, so the elapsed
+   * ctx time is scaled back up. At rate 1 this is the identity it always was.
    */
   get currentTime() {
     if (!this._ctx || !this._buffer) return this._pauseOffset
     if (this._isPlaying) {
-      const t = this._ctx.currentTime - this._startTime
+      const t = (this._ctx.currentTime - this._startTime) * this.rate
       return Math.max(0, Math.min(t, this.duration))
     }
     return this._pauseOffset
@@ -124,46 +156,72 @@ class AudioEngine {
     this._ensureContext()
     if (this._ctx.state === 'suspended') this._ctx.resume()
 
-    this._source        = this._ctx.createBufferSource()
-    this._source.buffer = this._buffer
-    this._source.connect(this._songGain)
-
-    // _pauseOffset is in PREVIEW time (lead-in silence + audio). Positions
-    // inside the lead-in delay the buffer start; positions past it seek into
-    // the buffer. Either way _startTime maps ctx-time ↔ preview-time.
+    // _pauseOffset is in PREVIEW time (lead-in silence + audio + outro pad).
+    // _startTime maps ctx-time ↔ preview-time; dividing by rate is what makes
+    // a preview second cost less than a second of wall clock.
     const offset    = this._pauseOffset
-    this._startTime = this._ctx.currentTime - offset
-    if (offset < this.leadIn) {
-      this._source.start(this._ctx.currentTime + (this.leadIn - offset), 0)
-    } else {
-      this._source.start(0, offset - this.leadIn)
-    }
+    this._startTime = this._ctx.currentTime - offset / this.rate
 
-    this._source.onended = () => {
-      // Only treat this as a natural end if we didn't manually stop
-      if (this._isPlaying) {
-        this._isPlaying   = false
-        this._pauseOffset = 0
-        this._stopScheduler()
-        this.onEnd?.()
+    // Positions inside the lead-in delay the buffer start; positions past it
+    // seek into the buffer. Past the audio there is nothing to play at all —
+    // that is the virtual outro — so no source is created and only the clock
+    // and the metronome run.
+    if (offset < this.audioEnd) {
+      this._source        = this._ctx.createBufferSource()
+      this._source.buffer = this._buffer
+      this._source.playbackRate.value = this.rate
+      this._source.connect(this._songGain)
+      if (offset < this.leadIn) {
+        this._source.start(this._ctx.currentTime + (this.leadIn - offset) / this.rate, 0)
+      } else {
+        this._source.start(0, offset - this.leadIn)
       }
+      // The end of the preview is the end of the OUTRO, which is past the end
+      // of the buffer, so the source finishing is not the end of playback.
+      this._source.onended = null
+    } else {
+      this._source = null
     }
 
     this._isPlaying = true
+    this._armEndTimer()
     this._startScheduler()
+  }
+
+  /**
+   * One timer owns "the preview ended", instead of the buffer's onended event:
+   * the buffer now stops before the preview does (the outro is virtual), and
+   * it does not exist at all when playback starts inside that outro.
+   */
+  _armEndTimer() {
+    clearTimeout(this._endTimer)
+    const left = (this.duration - this._pauseOffset) / this.rate
+    this._endTimer = setTimeout(() => {
+      if (!this._isPlaying) return
+      this._isPlaying   = false
+      this._pauseOffset = 0
+      this._source      = null
+      this._stopScheduler()
+      this.onEnd?.()
+    }, Math.max(0, left * 1000))
   }
 
   /** Pause playback and metronome. Remembers current position. */
   pause() {
     if (!this._isPlaying) return
 
-    // Snapshot current audio position before stopping
+    // Snapshot current preview position before stopping
     this._pauseOffset = Math.max(
       0,
-      Math.min(this._ctx.currentTime - this._startTime, this.duration)
+      Math.min((this._ctx.currentTime - this._startTime) * this.rate, this.duration)
     )
-    this._source.onended = null   // prevent spurious onEnd callback
-    this._source.stop()
+    clearTimeout(this._endTimer)
+    this._endTimer = null
+    if (this._source) {
+      this._source.onended = null   // prevent spurious onEnd callback
+      this._source.stop()
+      this._source = null
+    }
     this._stopScheduler()
     this._isPlaying = false
   }
@@ -183,8 +241,13 @@ class AudioEngine {
     const wasPlaying = this._isPlaying
 
     if (this._isPlaying) {
-      this._source.onended = null
-      this._source.stop()
+      clearTimeout(this._endTimer)
+      this._endTimer = null
+      if (this._source) {
+        this._source.onended = null
+        this._source.stop()
+        this._source = null
+      }
       this._stopScheduler()
       this._isPlaying = false
     }
@@ -202,11 +265,15 @@ class AudioEngine {
    * @param {number} g.anchor  PREVIEW-time of beat 1 (downbeat), half-beat
    *                           shift included. Informational only: the click
    *                           grid comes from bpm + leadIn (see _startScheduler)
+   * @param {number} [g.leadOffset]  Sub-beat part of leadIn — the offset. Only
+   *                           the waveform reads it, to label the two bands apart.
+   * @param {number} [g.tailOwn]     Silence the song itself ends with (s).
+   * @param {number} [g.tailPad]     Silence the export will add after it (s).
    *
    * The current position is preserved in AUDIO terms: if the lead-in length
    * changes, the playhead keeps pointing at the same music.
    */
-  setGrid({ bpm, leadIn, anchor }) {
+  setGrid({ bpm, leadIn, anchor, leadOffset, tailOwn, tailPad }) {
     const wasPlaying = this._isPlaying
     const oldLeadIn  = this.leadIn
     const pos        = this.currentTime
@@ -216,6 +283,11 @@ class AudioEngine {
     this.bpm           = bpm
     this.leadIn        = leadIn
     this.firstBeatTime = anchor
+    if (leadOffset !== undefined) {
+      this.leadOffset = Math.max(0, Math.min(leadOffset, leadIn))
+    }
+    if (tailOwn !== undefined) this.tailOwn = Math.max(0, tailOwn)
+    if (tailPad !== undefined) this.tailPad = Math.max(0, tailPad)
 
     // Re-map the playhead into the new preview timeline
     if (pos > oldLeadIn) {
@@ -225,6 +297,39 @@ class AudioEngine {
     } // else: pos 0 with no previous lead-in → stay at 0
 
     if (wasPlaying) this.play()
+  }
+
+  /**
+   * Set the PREVIEW playback speed. Never touches the export — phase 2 pads and
+   * encodes the original file and knows nothing about this — and BpmView.show
+   * puts it back to 1 for every new song, so it cannot be carried over.
+   *
+   * @param {number} r  clamped to RATE_MIN…RATE_MAX and snapped to RATE_STEP
+   * @returns {number}  the rate actually applied
+   */
+  setRate(r) {
+    const snapped = Math.round(Number(r) / RATE_STEP) * RATE_STEP
+    const next    = Math.min(RATE_MAX, Math.max(RATE_MIN, snapped))
+    // Floating point: 0.7000000000000001 would fail the === below and restart
+    // playback on every keypress that changes nothing.
+    const clean   = Math.round(next * 1000) / 1000
+    if (clean === this.rate) return this.rate
+
+    // Restarting is what re-reads the rate: playbackRate is settable live, but
+    // _startTime and every beat already queued in the scheduler assume the old
+    // one, so the clean way is to pause and play from the same position.
+    const wasPlaying = this._isPlaying
+    const pos        = this.currentTime
+    if (wasPlaying) this.pause()
+    this.rate         = clean
+    this._pauseOffset = pos
+    if (wasPlaying) this.play()
+    return this.rate
+  }
+
+  /** Step the preview speed by ±RATE_STEP. @returns {number} the new rate */
+  nudgeRate(steps) {
+    return this.setRate(this.rate + steps * RATE_STEP)
   }
 
   /**
@@ -299,6 +404,8 @@ class AudioEngine {
   /** Stop playback, rewind to zero. */
   stop() {
     if (this._isPlaying) this.pause()
+    clearTimeout(this._endTimer)
+    this._endTimer    = null
     this._pauseOffset = 0
   }
 
@@ -443,12 +550,25 @@ class AudioEngine {
   // ── Metronome scheduler ────────────────────────────────────────────────────
 
   /**
+   * The gap between two clicks in CTX time. The grid is fixed in PREVIEW time —
+   * beat n at n·60/bpm, wherever the music ends up — so at half speed the beats
+   * are still the same beats, they just take twice as long to arrive. That is
+   * what keeps a slowed-down preview honest: the clicks stay on the map's grid
+   * instead of drifting off it.
+   */
+  _beatStep() {
+    return (60 / this.bpm) / this.rate
+  }
+
+  /**
    * Seed _nextBeatTime on the map's beat grid, then start the scheduling loop.
    *
    * KEY RELATIONSHIP
    * ─────────────────
    *   _startTime maps preview-time ↔ ctx-time:
-   *     ctx_time_of_preview_position_T  =  _startTime + T
+   *     ctx_time_of_preview_position_T  =  _startTime + T / rate
+   *   rate is 1 unless the preview speed was changed, so this is normally just
+   *   _startTime + T. _beatStep above is that same division, per beat.
    *
    *   The clicks sit on the grid of the EXPORTED map: beat K is at
    *   K × beatDur from preview-time 0 (the start of the padded audio), which is
@@ -464,7 +584,7 @@ class AudioEngine {
    * yields the correct next beat for the new position.
    */
   _startScheduler() {
-    const beatDur = 60 / this.bpm
+    const step = this._beatStep()
 
     // Clicks run through the lead-in silence too, as a count-in: those beats
     // exist in the exported map, and hearing them is how you tell how much
@@ -474,24 +594,24 @@ class AudioEngine {
 
     // Find the next grid line that hasn't fired yet
     const elapsed = this._ctx.currentTime - this._startTime
-    const nextN   = Math.max(minN, Math.ceil(elapsed / beatDur))
-    this._nextBeatTime = this._startTime + nextN * beatDur
+    const nextN   = Math.max(minN, Math.ceil(elapsed / step))
+    this._nextBeatTime = this._startTime + nextN * step
 
     // Advance past any floating-point edge where we're still exactly on currentTime
     while (this._nextBeatTime <= this._ctx.currentTime) {
-      this._nextBeatTime += beatDur
+      this._nextBeatTime += step
     }
 
     this._schedule()
   }
 
   _schedule() {
-    const beatDur = 60 / this.bpm
+    const step = this._beatStep()
 
     while (this._nextBeatTime < this._ctx.currentTime + LOOKAHEAD) {
       this._scheduleClick(this._nextBeatTime)
       this._scheduleFlash(this._nextBeatTime)
-      this._nextBeatTime += beatDur
+      this._nextBeatTime += step
     }
 
     this._schedulerTimer = setTimeout(() => this._schedule(), SCHEDULE_INTERVAL)
@@ -643,5 +763,8 @@ function _renderClick(ctx, dest, time, sound) {
 }
 
 AudioEngine.METRO_SOUNDS = METRO_SOUNDS
+AudioEngine.RATE_MIN     = RATE_MIN
+AudioEngine.RATE_MAX     = RATE_MAX
+AudioEngine.RATE_STEP    = RATE_STEP
 
 window.AudioEngine = AudioEngine

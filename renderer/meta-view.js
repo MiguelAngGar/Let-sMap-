@@ -30,6 +30,11 @@ const MetaView = (() => {
     const img   = $('meta-cover-img')
     const empty = $('meta-cover-empty')
     const rm    = $('meta-cover-remove')
+    const box   = $('meta-cover-box')
+
+    // Empty, the box advertises itself with a dashed edge; full, it is a frame
+    // and only the hover overlay offers to swap the image (see style.css).
+    box?.classList.toggle('has-image', !!_coverPath)
 
     if (_coverPath) {
       // Cache-bust: tmp cover paths are unique per fetch, but be safe
@@ -56,6 +61,9 @@ const MetaView = (() => {
     if (back) back.disabled = busy
     ;['meta-title', 'meta-artist', 'meta-cover-change', 'meta-cover-remove']
       .forEach(id => { const el = $(id); if (el) el.disabled = busy })
+    // The box is not a <button>, so it cannot be disabled — it is marked busy
+    // instead, which stops its click handler and hides its invitation.
+    $('meta-cover-box')?.classList.toggle('busy', busy)
     if (!busy) _renderCover()   // restore remove-btn disabled state
   }
 
@@ -107,6 +115,22 @@ const MetaView = (() => {
   function _initDropZone() {
     const box = $('meta-cover-box')
     if (!box) return
+
+    // Clicking the box opens the picker, exactly like clicking the song drop
+    // zone on the first screen. The "Choose image…" button still works; this
+    // just stops the box from looking droppable while being inert to a click.
+    box.addEventListener('click', () => {
+      if (box.classList.contains('busy')) return
+      if ($('meta-create-btn')?.disabled) return
+      _changeCover()
+    })
+
+    // It advertises itself as a button, so it has to answer to one.
+    box.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ' && e.code !== 'Space') return
+      e.preventDefault()
+      box.click()
+    })
 
     box.addEventListener('dragenter', (e) => {
       if (!_canAccept(e.dataTransfer)) return

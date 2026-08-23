@@ -248,11 +248,25 @@ const BpmView = (() => {
     if (!_engine) return
     const bpm  = effectiveBpm()
     const data = _computePad(bpm, _halfBeat)
-    if (data) {
-      _engine.setGrid({ bpm, leadIn: data.pad, anchor: data.total })
-    } else {
-      _engine.setGrid({ bpm, leadIn: 0, anchor: 0 })
+    // The outro the export will produce: the song's own trailing silence topped
+    // up to the target rather than stacked on it, so the pad is what is missing.
+    const tailOwn = _trailing
+    const tailPad = Math.max(0, _coldEnd - _trailing)
+
+    if (!data) {
+      _engine.setGrid({ bpm, leadIn: 0, anchor: 0, leadOffset: 0, tailOwn, tailPad })
+      return
     }
+
+    // The waveform shows the lead-in as two bands, so it needs to know where
+    // the split is. data.fieldMs is exactly the offset the field shows: the
+    // sub-beat slice that lands beat 1 on the grid. What is left of the pad is
+    // whole beats. It can go negative when the offset is dialled back further
+    // than the alignment slice, and then there is simply no offset band.
+    const leadOffset = Math.max(0, Math.min(data.fieldMs / 1000, data.pad))
+
+    _engine.setGrid({ bpm, leadIn: data.pad, anchor: data.total,
+                      leadOffset, tailOwn, tailPad })
   }
 
   // ── Render helpers ─────────────────────────────────────────────────────────
@@ -560,6 +574,7 @@ const BpmView = (() => {
     _renderToggles()
     _renderOffsetInfo()
     _renderPlayBtn(_engine?.isPlaying ?? false)
+    _renderRate(_engine?.rate ?? 1)
   }
 
   // ── User actions ───────────────────────────────────────────────────────────
@@ -700,7 +715,45 @@ const BpmView = (() => {
     if (e.code === 'Space') {
       e.preventDefault()
       _togglePlay()
+      return
     }
+
+    // Preview speed. Deliberately keyboard-only and unlabelled beyond a small
+    // readout: it is for the rare case of checking a click against a transient
+    // by ear, not part of the normal flow. e.key rather than e.code so it works
+    // on every layout — a Spanish keyboard has no dedicated + key, and the
+    // numeric keypad reports its own codes.
+    if (e.key === '+' || e.key === '=') { e.preventDefault(); _nudgeRate(1);  return }
+    if (e.key === '-' || e.key === '_') { e.preventDefault(); _nudgeRate(-1); return }
+    if (e.key === '0')                  { e.preventDefault(); _setRate(1);    return }
+  }
+
+  // ── Preview speed ──────────────────────────────────────────────────────────
+  //
+  // Preview ONLY, and never remembered. The export always uses the original
+  // speed (phase 2 pads and encodes the source file and is never told about
+  // this), and show() resets it to 1× for every new song, so it cannot leak
+  // into the next one or into a map.
+
+  function _nudgeRate(steps) {
+    if (!_engine) return
+    _renderRate(_engine.nudgeRate(steps))
+  }
+
+  function _setRate(r) {
+    if (!_engine) return
+    _renderRate(_engine.setRate(r))
+  }
+
+  function _renderRate(rate) {
+    const el = $('speed-readout')
+    if (!el) return
+    const isDefault = Math.abs(rate - 1) < 1e-9
+    el.textContent = `${rate.toFixed(1)}×`
+    el.title = t('bpm.speed_title')
+    // At 1× it stays out of the way; off 1× it lights up, because a preview
+    // running at the wrong speed must never be mistaken for the real thing.
+    el.classList.toggle('off-default', !isDefault)
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -848,6 +901,9 @@ const BpmView = (() => {
     _baseBpm = Math.round(analysis.bpm * 100) / 100
 
     _initEngine()
+    // Every song starts at its own speed: the preview rate is never remembered,
+    // not across songs and not into the export.
+    _engine.setRate(1)
     // Preview grid = final map grid: lead-in silence + downbeat on n·beatDur.
     _syncEngineGrid()
 

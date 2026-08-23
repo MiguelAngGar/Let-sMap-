@@ -871,18 +871,42 @@ body.macos #titlebar { padding-left: 80px; }
   gap:         16px;
 }
 
+/* Same affordance as #drop-zone, scaled down: dashed edge, accent on hover, and
+   a pointer, because this box takes a drop AND a click. */
 .meta-cover-box {
   width:         112px;
   height:        112px;
   flex-shrink:   0;
   border-radius: var(--radius-md);
-  border:        1px solid var(--border);
-  background:    var(--input-bg);
+  border:        2px dashed var(--drop-border);
+  background:    var(--drop-bg);
   overflow:      hidden;
   display:       flex;
   align-items:   center;
   justify-content: center;
+  position:      relative;
+  cursor:        pointer;
+  transition:    border-color var(--tr), background var(--tr),
+                 color var(--tr), box-shadow var(--tr);
 }
+/* With artwork in it there is nothing left to invite, so it settles into a plain
+   frame and only the hover overlay offers the swap. */
+.meta-cover-box.has-image {
+  border-style: solid;
+  border-color: var(--border);
+  background:   var(--input-bg);
+}
+.meta-cover-box:hover { border-color: var(--drag-border); background: var(--drag-bg); }
+.meta-cover-box:focus-visible {
+  outline:      none;
+  border-color: var(--drag-border);
+  box-shadow:   0 0 0 3px var(--accent-glow);
+}
+/* The placeholder note steps aside for the overlay instead of showing through
+   it — two icons on top of each other just read as a smudge. */
+.meta-cover-box:hover         .meta-cover-empty,
+.meta-cover-box:focus-visible .meta-cover-empty,
+.meta-cover-box.drag-over     .meta-cover-empty { opacity: 0; }
 
 #meta-cover-img {
   width:      100%;
@@ -895,6 +919,7 @@ body.macos #titlebar { padding-left: 80px; }
   width:  40px;
   height: 40px;
   color:  var(--text-muted);
+  transition: opacity var(--tr), color var(--tr);
 }
 .meta-cover-empty svg { width: 100%; height: 100%; }
 
@@ -938,8 +963,65 @@ body.macos #titlebar { padding-left: 80px; }
   border-color: var(--drag-border);
   background:   var(--drag-bg);
   box-shadow:   0 0 0 4px var(--accent-glow);
+  border-style: dashed;
 }
 .meta-cover-box.drag-over .meta-cover-empty { color: var(--accent); }
+
+/* What the box accepts, said out loud on hover or while a drag is over it. It
+   sits on top of the artwork, so it carries its own scrim to stay readable over
+   whatever the cover happens to be. */
+.meta-cover-overlay {
+  position:        absolute;
+  inset:           0;
+  display:         flex;
+  flex-direction:  column;
+  align-items:     center;
+  justify-content: center;
+  gap:             4px;
+  padding:         4px;
+  text-align:      center;
+  font-size:       10.5px;
+  font-weight:     600;
+  line-height:     1.2;
+  letter-spacing:  0.02em;
+  color:           var(--accent);
+  background:      var(--drag-bg);
+  backdrop-filter: blur(2px);
+  opacity:         0;
+  transition:      opacity var(--tr);
+  pointer-events:  none;   /* the box owns the click and the drop, not this */
+}
+.meta-cover-box.has-image .meta-cover-overlay {
+  color:      #fff;
+  background: var(--overlay);
+}
+.meta-cover-overlay-icon { width: 26px; height: 26px; }
+.meta-cover-box:hover        .meta-cover-overlay,
+.meta-cover-box:focus-visible .meta-cover-overlay,
+.meta-cover-box.drag-over    .meta-cover-overlay { opacity: 1; }
+/* Nothing to invite while the image is being processed */
+.meta-cover-box.busy { cursor: progress; }
+.meta-cover-box.busy .meta-cover-overlay { opacity: 0; }
+
+/* ── Preview speed readout (BPM view playback row) ───────────────────────── */
+.speed-area {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  flex-shrink: 0;   /* .time-display is the flexible one in this row */
+}
+.speed-readout {
+  font-size:      12px;
+  font-weight:    600;
+  font-variant-numeric: tabular-nums;
+  color:          var(--text-muted);
+  min-width:      34px;
+  text-align:     right;
+  transition:     color var(--tr);
+}
+/* Off 1× it lights up: a preview running at the wrong speed must never be
+   mistaken for how the map will actually sound. */
+.speed-readout.off-default { color: var(--accent); }
 
 /* ══════════════════════════════════════════════════════════════════════════
    SHARED BUTTONS

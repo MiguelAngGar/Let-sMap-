@@ -75,6 +75,14 @@
 
       <span id="time-display" class="time-display" aria-live="off">0:00 / 0:00</span>
 
+      <!-- Preview speed. Keyboard only and deliberately quiet: it is for
+           checking a click against a transient by ear, not part of the normal
+           flow. Never applied to the exported map. -->
+      <div class="speed-area">
+        <span id="speed-readout" class="speed-readout" aria-live="off">1.0×</span>
+        <span class="kb-hint" data-i18n="bpm.speed_hint">+ / −</span>
+      </div>
+
       <div class="beat-area">
         <div id="beat-dot" aria-hidden="true"></div>
         <span class="kb-hint" data-i18n="bpm.kb_hint">Space</span>
@@ -178,7 +186,12 @@
       <p class="meta-subtitle" data-i18n="meta.subtitle">Couldn't identify this song with confidence. Check the details or fill them in yourself.</p>
 
       <div class="meta-cover-row">
-        <div id="meta-cover-box" class="meta-cover-box" aria-hidden="true">
+        <!-- Droppable AND clickable, like the song drop zone on the first
+             screen, and dressed the same way: dashed border, the same
+             arrow-into-tray icon, the same accent on hover. Before this, nothing
+             about the box said an image could be dropped on it at all. -->
+        <div id="meta-cover-box" class="meta-cover-box" role="button" tabindex="0"
+             data-i18n-title="meta.cover.box_title">
           <img id="meta-cover-img" class="hidden" alt="">
           <div id="meta-cover-empty" class="meta-cover-empty">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
@@ -187,6 +200,15 @@
               <circle cx="6" cy="18" r="3"/>
               <circle cx="18" cy="16" r="3"/>
             </svg>
+          </div>
+          <div class="meta-cover-overlay" aria-hidden="true">
+            <svg class="meta-cover-overlay-icon" viewBox="0 0 48 48" fill="none">
+              <path d="M24 4v28M14 22l10 10 10-10" stroke="currentColor" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M8 36v4a2 2 0 002 2h28a2 2 0 002-2v-4"
+                    stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+            </svg>
+            <span data-i18n="meta.cover.drop_short">Drop or click</span>
           </div>
         </div>
         <div class="meta-cover-btns">
