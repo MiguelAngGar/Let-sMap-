@@ -628,6 +628,9 @@ body.macos #titlebar { padding-left: 80px; }
 }
 .offset-step button:disabled { opacity: 0.25; cursor: not-allowed; }
 .offset-step .offset-stat-value { min-width: 58px; text-align: center; }
+/* The ↺ is a different kind of action from the ±, so it does not sit flush
+   against them the way the two steppers sit against the number. */
+.offset-step .offset-reset { margin-left: 6px; }
 
 .toggle-btn.active {
   background:   var(--accent);

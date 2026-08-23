@@ -270,9 +270,10 @@ const BpmView = (() => {
       own,
       add,
       // What the map will actually end with, for the criteria notes
-      total:   own + add,
-      atFloor: add <= 1e-6,
-      atCap:   add >= OUTRO_MAX - 1e-6
+      total:     own + add,
+      atFloor:   add <= 1e-6,
+      atCap:     add >= OUTRO_MAX - 1e-6,
+      atDefault: Math.abs(add - _defaultOutroAdd()) <= 1e-6
     }
   }
 
@@ -298,6 +299,22 @@ const BpmView = (() => {
     // Keep the button under the keyboard after the readout is rebuilt
     const btn = $(delta < 0 ? 'outro-minus' : 'outro-plus')
     if (btn && !btn.disabled) btn.focus()
+  }
+
+  /**
+   * Back to the amount the app worked out.
+   *
+   * The default is rarely a round number (1.981 s to reach 2 s), and the ± walks
+   * the half-second grid — so one press of + is enough to lose it for good with
+   * no way of typing it back. Same escape hatch as the offset field's ↺.
+   */
+  function _resetOutro() {
+    const target = _defaultOutroAdd()
+    if (Math.abs(_outroInfo().add - target) > 1e-6) {
+      _outroAdd = target
+      _syncEngineGrid()
+    }
+    _renderOffsetInfo()
   }
 
   // ── Engine grid sync ───────────────────────────────────────────────────────
@@ -566,6 +583,9 @@ const BpmView = (() => {
       own:   outro.own.toFixed(3),
       total: outro.total.toFixed(3)
     })
+    // The ↺ names the value it goes back to, since that value is not round and
+    // is not written anywhere else once the ± has moved off it.
+    const outroReset = t('bpm.outro.reset', { secs: _defaultOutroAdd().toFixed(3) })
 
     el.innerHTML = `
       <span class="offset-stat">
@@ -590,6 +610,9 @@ const BpmView = (() => {
           <button type="button" id="outro-plus" data-outro="1"
                   title="${t('bpm.outro.more')}" aria-label="${t('bpm.outro.more')}"
                   ${outro.atCap ? 'disabled' : ''}>+</button>
+          <button type="button" id="outro-reset" class="offset-reset" data-outro-reset
+                  title="${outroReset}" aria-label="${outroReset}"
+                  ${outro.atDefault ? 'disabled' : ''}>↺</button>
         </span>
       </span>
       <span class="offset-stat">
@@ -857,6 +880,8 @@ const BpmView = (() => {
     $('offset-info')?.addEventListener('click', (e) => {
       const lead = e.target.closest?.('[data-leadin]')
       if (lead && !lead.disabled) { _adjustLeadIn(parseInt(lead.dataset.leadin, 10)); return }
+      const back = e.target.closest?.('[data-outro-reset]')
+      if (back && !back.disabled) { _resetOutro(); return }
       const outro = e.target.closest?.('[data-outro]')
       if (outro && !outro.disabled) _adjustOutro(parseInt(outro.dataset.outro, 10))
     })
