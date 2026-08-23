@@ -7,8 +7,10 @@
  * ───────────────
  * The whole song in ~900 px is ~230 ms per pixel: the silence we prepend is
  * three pixels wide and a beat at 225 BPM is barely one, so neither the padding
- * nor the grid can be judged by eye. Zoomed all the way in a pixel is about a
- * third of a millisecond, which is finer than the offset field can even be set.
+ * nor the grid can be judged by eye. Zoomed all the way in a pixel is about
+ * 0.07 ms — a couple of audio samples, far finer than the offset field can be
+ * set — and the ladder climbs there in quarter-octave rungs so a trackpad pinch
+ * reads as a continuous zoom rather than a series of jumps.
  *
  * WHO MOVES THE VIEW
  * ──────────────────
@@ -48,8 +50,28 @@
 
 /* global AudioEngine */  // just for jsdoc; imported via <script> tag
 
-const ZOOM_STEPS  = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
-const MIN_WINDOW  = 0.25  // seconds — deepest zoom shows at least this much
+// Zoom ladder, ×1 to ×512, four steps to the octave (≈1.19 per step).
+//
+// Doubling every step made a pinch feel like it was teleporting: the smallest
+// move the gesture could make was an octave. Quarter-octave rungs are fine
+// enough to read as a continuous zoom, and the coarse controls stay coarse by
+// spending STEPS_PER_OCTAVE of them at once — so a mouse notch and the ± buttons
+// still move exactly ×2, the way they always did.
+const STEPS_PER_OCTAVE = 4
+const ZOOM_STEPS = (() => {
+  const steps = []
+  for (let i = 0; ; i++) {
+    const z = Math.pow(2, i / STEPS_PER_OCTAVE)
+    steps.push(Math.round(z * 1e4) / 1e4)
+    if (z >= 512) break
+  }
+  return steps
+})()
+// Deepest zoom, as the window it leaves on screen. 60 ms across ~900 px is
+// ~0.07 ms per pixel — about two audio samples at 44.1 kHz, so it is the finest
+// zoom that still shows real signal rather than a stretched one. It used to be
+// 0.25 s, which quietly capped anything under ~2 minutes below ×512.
+const MIN_WINDOW  = 0.06
 const MIN_BEAT_PX = 8     // beat lines need at least this much spacing (CSS px)
 const MIN_BAR_PX  = 26    // …and bar-only lines at least this much
 const EASE        = 0.24  // how fast the view catches up with a pan target
@@ -71,7 +93,10 @@ const PINCH_STEP  = 24
 // burn the whole ZOOM_STEPS ladder.
 const NOTCH_PX         = 40
 const NOTCH_GAP_MS     = 45
-const ZOOM_COOLDOWN_MS = 150
+// One quarter-octave rung per 40 ms: ~6 octaves a second while the fingers keep
+// moving, so a short pinch nudges and a determined one crosses the whole ladder.
+// This was 150 ms back when a rung was a whole octave.
+const ZOOM_COOLDOWN_MS = 40
 // This much quiet ends a gesture: accumulator and throttle both reset, so the
 // next notch or pinch starts from a clean slate instead of inheriting inertia.
 const GESTURE_GAP_MS   = 200
@@ -158,8 +183,10 @@ class WaveformTimeline {
   get zoom()   { return ZOOM_STEPS[Math.min(this._zi, this._maxIndex())] }
   get fitted() { return this._win() >= (this.engine.duration || 0) - 1e-9 }
 
-  zoomIn(anchor = null)  { this._setZoomIndex(this._zi + 1, anchor) }
-  zoomOut(anchor = null) { this._setZoomIndex(this._zi - 1, anchor) }
+  // `steps` is in ladder rungs. The default is a whole octave, which is what a
+  // wheel notch and the ± buttons have always been worth; the pinch passes 1.
+  zoomIn(anchor = null, steps = STEPS_PER_OCTAVE)  { this._setZoomIndex(this._zi + steps, anchor) }
+  zoomOut(anchor = null, steps = STEPS_PER_OCTAVE) { this._setZoomIndex(this._zi - steps, anchor) }
   zoomFit() { this._zi = 0; this._setStart(0); this._notifyZoom() }
 
   /** Reset to "whole song, from the top" — what every new song opens on. */
@@ -687,25 +714,33 @@ class WaveformTimeline {
         const coarse  = Math.abs(px) >= NOTCH_PX
         const uniform = gap <= GESTURE_GAP_MS &&
                         Math.abs(Math.abs(px) - Math.abs(prev)) < 0.5
-        let step = 0
+        let dir   = 0
+        let rungs = 0
         if (coarse && (gap >= NOTCH_GAP_MS || uniform)) {
-          // Real wheel notch. Unchanged behaviour: one notch, one level, at once.
-          step = Math.sign(px)
+          // Real wheel notch. Unchanged behaviour: one notch, one octave, at once.
+          dir   = Math.sign(px)
+          rungs = STEPS_PER_OCTAVE
           this._pinch = 0
         } else {
           this._pinch += px
           if (Math.abs(this._pinch) >= PINCH_STEP) {
-            // Inside a stream, so ration the levels. Without this a fast pinch
-            // (or its inertia) crosses the threshold on nearly every frame.
+            // Inside a stream, so ration the rungs in TIME. Rationing by event
+            // instead would make a 120 Hz trackpad zoom twice as far as a 60 Hz
+            // one for the same gesture. One quarter-octave rung per cooldown is
+            // fine enough to read as continuous, and a determined flick still
+            // covers the whole ladder.
             if (now - this._zoomAt >= ZOOM_COOLDOWN_MS) {
-              step = Math.sign(this._pinch)
+              dir   = Math.sign(this._pinch)
+              rungs = 1
               this._zoomAt = now
             }
             this._pinch = 0
           }
         }
-        if (step < 0) this.zoomIn(at)
-        else if (step > 0) this.zoomOut(at)
+        if (rungs) {
+          if (dir < 0) this.zoomIn(at, rungs)
+          else if (dir > 0) this.zoomOut(at, rungs)
+        }
         return
       }
 

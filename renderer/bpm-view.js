@@ -462,7 +462,13 @@ const BpmView = (() => {
 
   function _renderZoom(info) {
     const lvl = $('wave-zoom-level')
-    if (lvl) lvl.textContent = '×' + (info?.zoom ?? 1)
+    // The ladder is quarter-octave now, so most rungs are not whole numbers.
+    // One decimal below ×10 and none above keeps the readout the same width
+    // whatever rung it is on: ×1, ×1.2, ×1.7, ×2 … ×11, ×16 … ×512.
+    if (lvl) {
+      const z = Number(info?.zoom ?? 1)
+      lvl.textContent = '×' + (z >= 10 ? Math.round(z) : Math.round(z * 10) / 10)
+    }
 
     const out = $('wave-zoom-out')
     const inn = $('wave-zoom-in')
