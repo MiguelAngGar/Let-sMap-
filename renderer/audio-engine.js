@@ -77,11 +77,11 @@ class AudioEngine {
     // apart: whole beats of silence (the ± control) and, right up against the
     // music, the sub-beat slice that puts beat 1 on the grid — the offset.
     this.leadOffset    = 0        // sub-beat part of leadIn (s), 0 ≤ x ≤ leadIn
-    // The outro, same idea at the other end: what the song already ends with,
-    // and what the export tops it up by. tailPad is virtual — it is not in the
-    // decoded buffer — so it extends `duration` but has nothing to play.
-    this.tailOwn       = 0        // silence the song itself ends with (s)
-    this.tailPad       = 0        // silence the export will add after it (s)
+    // The outro: the silence the export APPENDS after the song. Virtual — it is
+    // not in the decoded buffer — so it extends `duration` but has nothing to
+    // play. Whatever quiet the song itself ends with is deliberately NOT tracked
+    // here: that is just audio, not something we put there.
+    this.tailPad       = 0        // silence the export will append (s)
 
     this.rate          = 1        // preview speed, RATE_MIN…RATE_MAX. Preview only.
     this._endTimer     = null     // fires when the preview reaches its end
@@ -267,13 +267,12 @@ class AudioEngine {
    *                           grid comes from bpm + leadIn (see _startScheduler)
    * @param {number} [g.leadOffset]  Sub-beat part of leadIn — the offset. Only
    *                           the waveform reads it, to label the two bands apart.
-   * @param {number} [g.tailOwn]     Silence the song itself ends with (s).
-   * @param {number} [g.tailPad]     Silence the export will add after it (s).
+   * @param {number} [g.tailPad]     Silence the export will append (s).
    *
    * The current position is preserved in AUDIO terms: if the lead-in length
    * changes, the playhead keeps pointing at the same music.
    */
-  setGrid({ bpm, leadIn, anchor, leadOffset, tailOwn, tailPad }) {
+  setGrid({ bpm, leadIn, anchor, leadOffset, tailPad }) {
     const wasPlaying = this._isPlaying
     const oldLeadIn  = this.leadIn
     const pos        = this.currentTime
@@ -286,7 +285,6 @@ class AudioEngine {
     if (leadOffset !== undefined) {
       this.leadOffset = Math.max(0, Math.min(leadOffset, leadIn))
     }
-    if (tailOwn !== undefined) this.tailOwn = Math.max(0, tailOwn)
     if (tailPad !== undefined) this.tailPad = Math.max(0, tailPad)
 
     // Re-map the playhead into the new preview timeline

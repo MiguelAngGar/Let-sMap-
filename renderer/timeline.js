@@ -385,14 +385,13 @@ class WaveformTimeline {
     if (beats > 0) out.push({ key: 'added',  t0: 0,     t1: beats })
     if (off   > 0) out.push({ key: 'offset', t0: beats, t1: lead  })
 
-    // One band for the whole outro. Its two halves are the silence already in
-    // the audio and the virtual pad past the end of it, and their sum is the
-    // figure the criteria talks about: the export TOPS the outro up rather than
-    // stacking, so tailPad is already max(0, target − tailOwn).
+    // Only what the export APPENDS. The quiet a song already ends with is just
+    // audio, and shading it as "outro" made it look like we had put it there —
+    // which is how a 2 s setting came to read as 3.160 s. Nothing appended means
+    // no band at all, which is the honest picture.
     const audioEnd = e.audioEnd ?? e.duration ?? 0
-    const own      = Math.max(0, e.tailOwn || 0)
     const pad      = Math.max(0, e.tailPad || 0)
-    if (own + pad > 0) out.push({ key: 'outro', t0: audioEnd - own, t1: audioEnd + pad })
+    if (pad > 0) out.push({ key: 'outro', t0: audioEnd, t1: audioEnd + pad })
 
     return out
   }

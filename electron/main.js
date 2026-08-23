@@ -361,7 +361,7 @@ ipcMain.handle('song:create-map', async (event, {
   originalName,
   meta,
   coverPath,
-  coldEnd
+  coldEndAdd
 }) => {
   const senderWin = BrowserWindow.fromWebContents(event.sender)
   const send = (step, msg) => {
@@ -385,11 +385,11 @@ ipcMain.handle('song:create-map', async (event, {
       mapperName: store.get('mapperName'),
       oggQuality: store.get('oggQuality'),
       leadIn:     store.get('leadInSeconds'),
-      // The BPM view can move the outro for this song; Settings only supplies
-      // the starting point. Falls back to the setting for any older caller.
-      coldEnd:    Number.isFinite(coldEnd) && coldEnd >= 0
-                    ? coldEnd
-                    : store.get('coldEndSeconds'),
+      // The BPM view sends the exact silence to append for THIS song, which its
+      // ± moved; Settings only seeded the starting value. coldEnd stays as the
+      // fallback for a caller that has not been told the per-song amount.
+      coldEnd:    store.get('coldEndSeconds'),
+      coldEndAdd: Number.isFinite(coldEndAdd) && coldEndAdd >= 0 ? coldEndAdd : undefined,
       send
     })
 

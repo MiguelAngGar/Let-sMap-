@@ -137,6 +137,8 @@ function clampExtraBeats(value, min = 0, max = maxExtraBeats(0.5)) {
  * @param {string}  opts.originalName  Song filename without extension (for metadata)
  * @param {object}  [opts.meta]        User-confirmed { title, artist } — skips auto-fetch
  * @param {?string} [opts.coverPath]   With opts.meta: cover image path, or null = no cover
+ * @param {number} [opts.coldEndAdd]   Silence to append after the song, exactly.
+ *                                     0 leaves the end of the audio untouched.
  * @param {string}  opts.exportDir     Output root directory
  * @param {string}  opts.mapperName    Written into Info.dat
  * @param {Function} opts.send         Progress callback (step, message)
@@ -156,6 +158,7 @@ async function run({
   oggQuality = 10,
   leadIn  = MIN_LEAD_DEFAULT,
   coldEnd = converter.COLD_END_SECONDS,
+  coldEndAdd,          // exact seconds to append; overrides coldEnd when finite
   extraBeats = 0,
   offsetNudgeMs = 0,
   send = () => {}
@@ -170,7 +173,7 @@ async function run({
   // Prefer single-pass pad+encode from the ORIGINAL file (one lossy generation).
   // Fall back to padding the phase-1 ogg for older callers.
   const fs = require('fs')
-  const encOpts = { quality: oggQuality, coldEnd }
+  const encOpts = { quality: oggQuality, coldEnd, coldEndAdd }
   const paddedPath = (originalPath && fs.existsSync(originalPath))
     ? await converter.padToOgg(originalPath, silencePad, encOpts)
     : await converter.addSilence(oggPath, silencePad, encOpts)

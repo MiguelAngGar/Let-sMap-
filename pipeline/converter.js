@@ -165,6 +165,29 @@ async function coldEndPad(inputPath, target = COLD_END_SECONDS) {
 }
 
 /**
+ * How much silence to append, from either of the two ways a caller can ask.
+ *
+ * `coldEndAdd` says it outright: append exactly this much, and 0 means leave the
+ * end of the audio exactly as it is. That is what the BPM view sends, because
+ * its ± moves that number directly and the export has to deliver what the
+ * readout promised — not re-derive it from a target and land somewhere else.
+ *
+ * `coldEnd` is the older way: a TARGET for the total, from which the missing
+ * amount is worked out by measuring the file. Kept for pipeline/index.js and
+ * any caller that only knows the setting.
+ *
+ * Explicit wins, and asking for exactly 0 has to mean 0 — so the target is only
+ * consulted when no explicit amount was given at all.
+ */
+async function resolveTailPad(inputPath, opts = {}) {
+  if (Number.isFinite(opts.coldEndAdd)) {
+    const add = clampSilence(Math.max(0, opts.coldEndAdd), 0)
+    return add > 0.01 ? add : 0
+  }
+  return coldEndPad(inputPath, opts.coldEnd)
+}
+
+/**
  * Convert any audio file to .ogg (libvorbis, 44100 Hz).
  * NOTE: only used to feed the Python BPM analyser — quality here does not
  * affect the exported song.ogg (that comes from padToOgg on the original).
@@ -197,7 +220,7 @@ async function addSilence(audioPath, seconds, opts = {}) {
   // original source to follow here, so just honour the quality target.
   const q = clampQuality(opts.quality ?? 10)
   const pad = Number(seconds) > 0.001 ? Number(seconds) : 0
-  const tailPad = await coldEndPad(audioPath, opts.coldEnd)
+  const tailPad = await resolveTailPad(audioPath, opts)
   return new Promise((resolve, reject) => {
     const out = path.join(TMP_DIR, `${Date.now()}_padded.ogg`)
     const cmd = ffmpeg()
@@ -285,8 +308,11 @@ function encoderArgs({ quality, codec, bitRate, sampleRate }) {
  * @param {number} [opts.quality=10]  Vorbis quality CEILING 0–10. A source
  *        already poorer than this keeps its own bitrate instead of being
  *        re-encoded larger for nothing — see encoderArgs above.
- * @param {number} [opts.coldEnd=2]   Trailing silence the export must end up
- *        with (seconds). Only the missing amount is appended.
+ * @param {number} [opts.coldEndAdd]  Silence to append, exactly (seconds).
+ *        0 leaves the end of the audio untouched. Takes precedence over coldEnd.
+ * @param {number} [opts.coldEnd=2]   Fallback when coldEndAdd is absent: a
+ *        TARGET for the total trailing silence, of which only the missing
+ *        amount is appended.
  *
  * The native sample rate is always probed and preserved (a 48 kHz upload is not
  * downsampled to 44100), and any prepended silence is generated at that same
@@ -295,7 +321,7 @@ function encoderArgs({ quality, codec, bitRate, sampleRate }) {
 async function padToOgg(inputPath, seconds, opts = {}) {
   const q = clampQuality(opts.quality ?? 10)
   const pad = Number(seconds) > 0.001 ? Number(seconds) : 0
-  const tailPad = await coldEndPad(inputPath, opts.coldEnd)
+  const tailPad = await resolveTailPad(inputPath, opts)
 
   return new Promise((resolve, reject) => {
     probeAudio(inputPath).then(({ sampleRate: sr, codec, bitRate }) => {
@@ -347,6 +373,6 @@ async function padToOgg(inputPath, seconds, opts = {}) {
 
 module.exports = {
   toOgg, addSilence, padToOgg, probeAudio, parseProbe, encoderArgs,
-  coldEndPad, clampSilence, measureTrailingSilence,
+  coldEndPad, resolveTailPad, clampSilence, measureTrailingSilence,
   COLD_END_SECONDS, MAX_SILENCE_SECONDS
 }

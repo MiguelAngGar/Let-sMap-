@@ -46,8 +46,8 @@ const BpmView = (() => {
   let _nudgeMs      = 0     // fine offset correction (ms of silence, ±)
   let _nudgeTouched = false // once true the explanation stays on screen
   let _trailing     = 0     // silence the song already ends with (s)
-  let _coldEnd      = 2     // outro target from Settings — the starting point
-  let _outroTarget  = 2     // outro target for THIS song, moved by the ± below
+  let _coldEnd      = 2     // outro target from Settings — seeds _outroAdd
+  let _outroAdd     = 0     // silence APPENDED for this song (s), moved by the ±
   let _analysis     = null
   let _candidates   = []
   let _originalName = ''
@@ -247,42 +247,51 @@ const BpmView = (() => {
 
   // ── Outro ──────────────────────────────────────────────────────────────────
   //
-  // The export TOPS the outro up to the target instead of stacking on it, so
-  // what the map ends with is max(what the song already ends with, target). A
-  // song that fades out can therefore already exceed the target and get nothing
-  // added — which looked like a bug ("my setting is 2 s but it says 3.160 s")
-  // purely because the readout showed the total without saying where it came
-  // from, and there was no way to change it without leaving the screen.
+  // The number here is the silence APPENDED after the song, not the total the
+  // map ends with. That distinction is the whole point: the export tops the
+  // outro up rather than stacking on it, so a song that already fades out gets
+  // nothing added — and showing the total made that look like the setting was
+  // being ignored ("I asked for 2 s and it says 3.160 s").
   //
-  // The ± moves what is SHOWN by one step, not the target behind it. Stepping a
-  // hidden target would mean pressing + twice for nothing when the song's own
-  // silence is already past it.
+  // So: 0 means leave the end of the audio exactly as it is. The default is
+  // whatever is MISSING to reach the configured seconds after the last audible
+  // beat — nothing when the song already carries them. From there the ± walks it
+  // in half seconds, down to 0 or up to the criteria's ceiling.
+
+  function _defaultOutroAdd() {
+    const target = Number.isFinite(_coldEnd) && _coldEnd >= 0 ? _coldEnd : 2
+    return Math.min(OUTRO_MAX, Math.max(0, target - Math.max(0, _trailing)))
+  }
 
   function _outroInfo() {
-    const own   = Math.max(0, _trailing)
-    const shown = Math.max(own, _outroTarget)
+    const own = Math.max(0, _trailing)
+    const add = Math.min(OUTRO_MAX, Math.max(0, _outroAdd))
     return {
       own,
-      shown,
-      added:   Math.max(0, shown - own),
-      // The song's own silence is a floor: shortening past it would mean
-      // cutting audio, which this app deliberately never does.
-      atFloor: shown <= own + 1e-6,
-      atCap:   shown >= OUTRO_MAX - 1e-6
+      add,
+      // What the map will actually end with, for the criteria notes
+      total:   own + add,
+      atFloor: add <= 1e-6,
+      atCap:   add >= OUTRO_MAX - 1e-6
     }
   }
 
   function _adjustOutro(delta) {
+    if (!delta) return
     const info = _outroInfo()
-    // Snapped to the step grid, so repeated presses land on round numbers even
-    // when the starting point is something like 3.160 s.
-    const raw  = info.shown + (delta > 0 ? OUTRO_STEP : -OUTRO_STEP)
-    const next = Math.min(OUTRO_MAX,
-                          Math.max(info.own, Math.round(raw / OUTRO_STEP) * OUTRO_STEP))
-    if (Math.abs(next - info.shown) < 1e-9) return
+    // Walk to the next half second, do not add one to the current value: the
+    // default is whatever was missing to reach the target and is rarely round
+    // (1.981 s, say). Rounding 1.981 + 0.5 lands on 2.5 and skips 2.0, so the
+    // step is a ceil upwards and a floor downwards. The epsilon keeps a value
+    // that is already on the grid from standing still.
+    const eps  = 1e-9
+    const k    = info.add / OUTRO_STEP
+    const next = Math.min(OUTRO_MAX, Math.max(0,
+      (delta > 0 ? Math.ceil(k + eps) : Math.floor(k - eps)) * OUTRO_STEP))
+    if (Math.abs(next - info.add) < 1e-9) return
 
-    _outroTarget = Math.round(next * 1000) / 1000
-    // The waveform reads the outro off the engine, so both have to be told
+    _outroAdd = Math.round(next * 1000) / 1000
+    // The waveform reads the appended silence off the engine, so both are told
     _syncEngineGrid()
     _renderOffsetInfo()
 
@@ -301,14 +310,13 @@ const BpmView = (() => {
     if (!_engine) return
     const bpm  = effectiveBpm()
     const data = _computePad(bpm, _halfBeat)
-    // The outro the export will produce: the song's own trailing silence topped
-    // up to the target rather than stacked on it, so the pad is what is missing.
-    const outro   = _outroInfo()
-    const tailOwn = outro.own
-    const tailPad = outro.added
+    // Only the silence we APPEND is a band on the waveform. The song's own
+    // trailing silence is just audio that happens to be quiet, and drawing it
+    // as "outro" is what made it look like the app had added it.
+    const tailPad = _outroInfo().add
 
     if (!data) {
-      _engine.setGrid({ bpm, leadIn: 0, anchor: 0, leadOffset: 0, tailOwn, tailPad })
+      _engine.setGrid({ bpm, leadIn: 0, anchor: 0, leadOffset: 0, tailPad })
       return
     }
 
@@ -320,7 +328,7 @@ const BpmView = (() => {
     const leadOffset = Math.max(0, Math.min(data.fieldMs / 1000, data.pad))
 
     _engine.setGrid({ bpm, leadIn: data.pad, anchor: data.total,
-                      leadOffset, tailOwn, tailPad })
+                      leadOffset, tailPad })
   }
 
   // ── Render helpers ─────────────────────────────────────────────────────────
@@ -550,14 +558,14 @@ const BpmView = (() => {
     const atCap   = data.extra >= data.maxExtra
     const lessTip = atFloor ? t('bpm.leadin.none') : t('bpm.leadin.less')
 
-    // The outro, and above all WHERE ITS NUMBER COMES FROM. Showing only the
-    // total is what made a fading song look like the app was ignoring the
-    // setting, so the breakdown is always one hover away, on the stat itself.
+    // The stat shows what is APPENDED; the tooltip says what the map ends up
+    // with, which is the figure the criteria talks about and has nowhere else
+    // to live now that the song's own tail is not drawn as a band.
     const outro    = _outroInfo()
-    const outroTip = outro.added > 0
-      ? t('offset.outro_title', { own: outro.own.toFixed(3), added: outro.added.toFixed(3) })
-      : t('offset.outro_title_own', { own: outro.own.toFixed(3) })
-    const outroLess = outro.atFloor ? t('bpm.outro.none') : t('bpm.outro.less')
+    const outroTip = t('offset.outro_title', {
+      own:   outro.own.toFixed(3),
+      total: outro.total.toFixed(3)
+    })
 
     el.innerHTML = `
       <span class="offset-stat">
@@ -576,9 +584,9 @@ const BpmView = (() => {
         <span class="offset-stat-label">${t('offset.outro')}</span>
         <span class="offset-step">
           <button type="button" id="outro-minus" data-outro="-1"
-                  title="${outroLess}" aria-label="${outroLess}"
+                  title="${t('bpm.outro.less')}" aria-label="${t('bpm.outro.less')}"
                   ${outro.atFloor ? 'disabled' : ''}>−</button>
-          <span class="offset-stat-value">${fmt(outro.shown * 1000)}</span>
+          <span class="offset-stat-value">${fmt(outro.add * 1000)}</span>
           <button type="button" id="outro-plus" data-outro="1"
                   title="${t('bpm.outro.more')}" aria-label="${t('bpm.outro.more')}"
                   ${outro.atCap ? 'disabled' : ''}>+</button>
@@ -619,16 +627,16 @@ const BpmView = (() => {
       }))
     }
 
-    // The export tops the outro up to the target, so the result is whichever is
-    // longer — and if the song itself ends with more than the criteria allows,
-    // no amount of padding can fix it.
-    if (outro.shown < CRITERIA_OUTRO_MIN - 1e-9) {
+    // What the map actually ends with: the song's own quiet ending plus whatever
+    // is appended. If the song alone already exceeds what the criteria allows,
+    // no amount of padding can fix it — only trimming, which is not on offer.
+    if (outro.total < CRITERIA_OUTRO_MIN - 1e-9) {
       notes.push(t('offset.criteria_outro', {
-        secs: outro.shown.toFixed(2), min: CRITERIA_OUTRO_MIN
+        secs: outro.total.toFixed(2), min: CRITERIA_OUTRO_MIN
       }))
-    } else if (outro.shown > CRITERIA_OUTRO_MAX + 1e-9) {
+    } else if (outro.total > CRITERIA_OUTRO_MAX + 1e-9) {
       notes.push(t('offset.criteria_long', {
-        secs: outro.shown.toFixed(1), max: CRITERIA_OUTRO_MAX
+        secs: outro.total.toFixed(1), max: CRITERIA_OUTRO_MAX
       }))
     }
 
@@ -730,9 +738,9 @@ const BpmView = (() => {
       extraBeats:    _extraBeats,
       offsetNudgeMs: _nudgeMs,
       originalName:  _originalName,
-      // Per-song outro target. Without this the ± would move the readout and
-      // the waveform and then be thrown away at export time.
-      coldEnd:       _outroTarget
+      // Exactly the silence to append, as the readout showed it. Sent as an
+      // amount and not a target so 0 really means "leave the ending alone".
+      coldEndAdd:    _outroInfo().add
     }
 
     // Resolve metadata + cover first: the file's own tags win, and the online
@@ -967,9 +975,10 @@ const BpmView = (() => {
     _nudgeTouched    = false
     _trailing        = Number.isFinite(trailingSilence) && trailingSilence >= 0 ? trailingSilence : 0
     _coldEnd         = Number.isFinite(coldEnd) && coldEnd >= 0 ? coldEnd : 2
-    // Each song starts from the configured target and is adjusted from there.
-    // Per song on purpose: it is a property of this song's ending, not a setting.
-    _outroTarget     = _coldEnd
+    // Only what is MISSING to reach the configured seconds after the song's own
+    // last audible beat — so a song that already ends with enough silence starts
+    // at 0 and gets nothing appended. Per song: it belongs to this ending.
+    _outroAdd        = _defaultOutroAdd()
     _analysis        = analysis
     _originalName    = originalName
     _halfBeat        = false
